@@ -18,12 +18,22 @@ from torch.utils.data import DataLoader
 from src.model.detector import CenterPoint
 from src.dataset import ViewOfDelft, collate_vod_batch
 
+
+def build_dataset(data_root, split, model_cfg):
+    return ViewOfDelft(
+        data_root=data_root,
+        split=split,
+        num_sweeps=model_cfg.get('num_sweeps', 1),
+        use_camera=model_cfg.get('use_camera', False),
+        image_size=model_cfg.get('image_size', None),
+    )
+
 @hydra.main(version_base=None, config_path='../config', config_name='train')    
 def train(cfg: DictConfig)-> None:
     L.seed_everything(cfg.seed, workers=True)
     
-    train_dataset = ViewOfDelft(data_root=cfg.data_root, split='train')
-    val_dataset = ViewOfDelft(data_root=cfg.data_root, split='val')
+    train_dataset = build_dataset(cfg.data_root, 'train', cfg.model)
+    val_dataset = build_dataset(cfg.data_root, 'val', cfg.model)
     
     train_dataloader = DataLoader(train_dataset, 
                                   batch_size=cfg.batch_size, 

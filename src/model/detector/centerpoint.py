@@ -22,6 +22,8 @@ from src.model.middle_encoders import PointPillarsScatter
 from src.model.backbones import SECOND
 from src.model.necks import SECONDFPN
 from src.model.heads import CenterHead
+from src.model.image_backbones import ImageBackbone
+from src.model.fusion import PointImageFusion
 
 class CenterPoint(L.LightningModule):
     def __init__(self, config):
@@ -40,6 +42,10 @@ class CenterPoint(L.LightningModule):
         backbone_config = config.get('backbone', None)
         neck_config = config.get('neck', None)
         head_config = config.get('head', None)
+        image_backbone_config = config.get('image_backbone', None)
+        fusion_config = config.get('fusion', None)
+        self.use_camera = config.get('use_camera', False)
+        self.num_sweeps = config.get('num_sweeps', 1)
         
         self.voxel_layer = Voxelization(**voxel_layer_config)
         self.voxel_encoder = PillarFeatureNet(**voxel_encoder_config)
@@ -47,6 +53,8 @@ class CenterPoint(L.LightningModule):
         self.backbone = SECOND(**backbone_config)
         self.neck = SECONDFPN(**neck_config)
         self.head = CenterHead(**head_config)
+        self.image_backbone = ImageBackbone(**image_backbone_config) if image_backbone_config else None
+        self.point_fusion = PointImageFusion(use_camera=self.use_camera, **fusion_config) if fusion_config else None
         
         self.optimizer_config = config.get('optimizer', None)
         
@@ -63,7 +71,8 @@ class CenterPoint(L.LightningModule):
         voxel_dict = dict()
         voxels, coors, num_points = [], [], []
         for i, res in enumerate(points):
-            res_voxels, res_coors, res_num_points = self.voxel_layer(res.cuda())
+            res = res.to(self.device)
+            res_voxels, res_coors, res_num_points = self.voxel_layer(res)
             res_coors = F.pad(res_coors, (1, 0), mode='constant', value=i)
             voxels.append(res_voxels)
             coors.append(res_coors)
@@ -79,7 +88,12 @@ class CenterPoint(L.LightningModule):
 
         return voxel_dict
     
-    def _model_forward(self, pts_data):
+    def _model_forward(self, pts_data, imgs=None, metas=None):
+        img_feats = None
+        if self.image_backbone is not None and imgs is not None and self.use_camera:
+            img_feats = self.image_backbone(imgs)
+        if self.point_fusion is not None:
+            pts_data = self.point_fusion(pts_data, img_feats=img_feats, metas=metas)
 
         voxel_dict = self.voxelize(pts_data)
     
@@ -97,10 +111,12 @@ class CenterPoint(L.LightningModule):
     
     def training_step(self, batch, batch_idx):
         pts_data = batch['pts']
+        imgs = batch.get('imgs')
+        metas = batch['metas']
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data)
+        ret_dict = self._model_forward(pts_data, imgs=imgs, metas=metas)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         losses = self.head.loss(*loss_input)
@@ -129,11 +145,12 @@ class CenterPoint(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         assert len(batch['pts']) == 1, 'Batch size should be 1 for validation'
         pts_data = batch['pts']
+        imgs = batch.get('imgs')
         metas = batch['metas']
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data)
+        ret_dict = self._model_forward(pts_data, imgs=imgs, metas=metas)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         bbox_list = self.head.get_bboxes(ret_dict, img_metas=metas)

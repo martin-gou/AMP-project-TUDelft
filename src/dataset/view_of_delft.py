@@ -1,8 +1,10 @@
 import os
+import logging
 import numpy as np
 from src.model.utils import LiDARInstance3DBoxes
 
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from vod.configuration import KittiLocations
@@ -37,12 +39,18 @@ class ViewOfDelft(Dataset):
     def __init__(self, 
                  data_root = 'data/view_of_delft', 
                  sequential_loading=False,
-                 split = 'train'):
+                 split = 'train',
+                 num_sweeps=1,
+                 use_camera=False,
+                 image_size=None):
         super().__init__()
         
         self.data_root = data_root
         assert split in ['train', 'val', 'test'], f"Invalid split: {split}. Must be one of ['train', 'val', 'test']"
         self.split = split
+        self.num_sweeps = int(num_sweeps)
+        self.use_camera = bool(use_camera)
+        self.image_size = tuple(image_size) if image_size is not None else None
         split_file = os.path.join(data_root, 'lidar', 'ImageSets', f'{split}.txt')
 
         with open(split_file, 'r') as f:
@@ -50,8 +58,52 @@ class ViewOfDelft(Dataset):
             self.sample_list = [line.strip() for line in lines]
         
         self.vod_kitti_locations = KittiLocations(root_dir = data_root)
+        self._configure_radar_source()
+
+    def _configure_radar_source(self):
+        if self.num_sweeps <= 1:
+            return
+
+        sweep_root = os.path.join(self.data_root, f'radar_{self.num_sweeps}_scans', 'training')
+        radar_dir = os.path.join(sweep_root, 'velodyne')
+        radar_calib_dir = os.path.join(sweep_root, 'calib')
+        if not os.path.isdir(radar_dir):
+            logging.warning(
+                "Requested %s sweeps but %s was not found. Falling back to single-sweep radar.",
+                self.num_sweeps,
+                radar_dir,
+            )
+            self.num_sweeps = 1
+            return
+
+        self.vod_kitti_locations.radar_dir = radar_dir
+        if os.path.isdir(radar_calib_dir):
+            self.vod_kitti_locations.radar_calib_dir = radar_calib_dir
+
     def __len__(self):
         return len(self.sample_list)
+
+    def _prepare_image(self, image):
+        image = np.asarray(image)
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=2)
+        if image.shape[2] > 3:
+            image = image[..., :3]
+
+        image = torch.from_numpy(image).permute(2, 0, 1).contiguous().float()
+        if image.max() > 1.0:
+            image = image / 255.0
+
+        ori_shape = tuple(image.shape[1:])
+        if self.image_size is not None and tuple(image.shape[1:]) != self.image_size:
+            image = F.interpolate(
+                image.unsqueeze(0),
+                size=self.image_size,
+                mode='bilinear',
+                align_corners=False,
+            ).squeeze(0)
+
+        return image, ori_shape
 
     def __getitem__(self, idx):
         num_frame = self.sample_list[idx]
@@ -60,7 +112,15 @@ class ViewOfDelft(Dataset):
         local_transforms = FrameTransformMatrix(vod_frame_data)
         
         radar_data = vod_frame_data.radar_data
+        if radar_data is None:
+            raise FileNotFoundError(f'Radar data for frame {num_frame} could not be loaded.')
 
+        image_tensor = None
+        ori_img_shape = None
+        if self.use_camera:
+            if vod_frame_data.image is None:
+                raise FileNotFoundError(f'Image for frame {num_frame} could not be loaded.')
+            image_tensor, ori_img_shape = self._prepare_image(vod_frame_data.image)
         
         gt_labels_3d_list = []
         gt_bboxes_3d_list = []
@@ -84,7 +144,7 @@ class ViewOfDelft(Dataset):
                 
                     gt_bboxes_3d_list.append(np.concatenate([bbox3d_locs, bbox3d_dims, bbox3d_rot], axis=0))
 
-        radar_data = torch.tensor(radar_data)
+        radar_data = torch.tensor(radar_data, dtype=torch.float32)
         
         if gt_bboxes_3d_list == []:
             gt_labels_3d = np.array([0])
@@ -99,13 +159,29 @@ class ViewOfDelft(Dataset):
             origin=(0.5, 0.5, 0))
         
         gt_labels_3d = torch.tensor(gt_labels_3d)
+
+        camera_projection = torch.from_numpy(local_transforms.camera_projection_matrix.copy()).float()
+        t_camera_radar = torch.from_numpy(local_transforms.t_camera_radar.copy()).float()
+        t_radar_camera = torch.from_numpy(local_transforms.t_radar_camera.copy()).float()
+        if image_tensor is not None:
+            img_shape = torch.tensor(image_tensor.shape[1:], dtype=torch.int64)
+            ori_img_shape = torch.tensor(ori_img_shape, dtype=torch.int64)
+        else:
+            img_shape = None
+            ori_img_shape = None
         
         return dict(
             lidar_data = radar_data,
+            image = image_tensor,
             gt_labels_3d = gt_labels_3d,
             gt_bboxes_3d = gt_bboxes_3d,
             meta = dict(
-                num_frame = num_frame 
+                num_frame = num_frame,
+                img_shape = img_shape,
+                ori_img_shape = ori_img_shape,
+                camera_projection = camera_projection,
+                t_camera_radar = t_camera_radar,
+                t_radar_camera = t_radar_camera,
             )
         )
     

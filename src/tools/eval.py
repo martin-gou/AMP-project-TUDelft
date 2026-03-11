@@ -18,22 +18,33 @@ from src.model.detector import CenterPoint
 from src.dataset import ViewOfDelft, collate_vod_batch
 
 
+def build_dataset(data_root, split, model_cfg):
+    return ViewOfDelft(
+        data_root=data_root,
+        split=split,
+        num_sweeps=model_cfg.get('num_sweeps', 1),
+        use_camera=model_cfg.get('use_camera', False),
+        image_size=model_cfg.get('image_size', None),
+    )
+
+
 @hydra.main(version_base=None, config_path='../config', config_name="eval")
 def eval(cfg: DictConfig) -> None:
     print('Evaluating model...')
     L.seed_everything(cfg.seed, workers=True)
-    
-    val_dataset = ViewOfDelft(data_root=cfg.data_root, split='val')
-    val_dataloader = DataLoader(val_dataset, 
-                                batch_size=1, 
-                                num_workers=cfg.num_workers, 
-                                shuffle=False,
-                                collate_fn=collate_vod_batch)
 
     checkpoint = torch.load(cfg.checkpoint_path, weights_only=False)
     checkpoint_params = DictConfig(checkpoint["hyper_parameters"])
     print('checkpoint params:', checkpoint_params.keys())
     print('checkpoint params cfg:', checkpoint_params.config.keys())
+    model_cfg = checkpoint_params.config
+
+    val_dataset = build_dataset(cfg.data_root, 'val', model_cfg)
+    val_dataloader = DataLoader(val_dataset, 
+                                batch_size=1, 
+                                num_workers=cfg.num_workers, 
+                                shuffle=False,
+                                collate_fn=collate_vod_batch)
     
     model = CenterPoint.load_from_checkpoint(checkpoint_path=cfg.checkpoint_path)
     model.eval()
