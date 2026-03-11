@@ -328,3 +328,16 @@ The pipeline follows the standard **pillar-based 3D detection** paradigm:
 5. **Detection** — `CenterHead` predicts a Gaussian heatmap (object centers) and regresses bounding box attributes per class.
 6. **Post-processing** — Top-K selection, `BBoxCoder` decoding, and circle-NMS yield final 3D detections.
 7. **Evaluation** — Predictions are formatted in KITTI style and scored with the VoD evaluation API (Average Precision).
+
+## Note
+### WANDB error
+```bash
+export WANDB_MODE=offline
+# and then later resync
+# 同步某一个 run
+wandb sync outputs/centerpoint_radar_baseline/wandb_logs/wandb/run-20260311_124445-m025k1ln
+
+# 或者同步该目录下所有 offline run
+wandb sync --sync-all outputs/centerpoint_radar_baseline/wandb_logs/wandb/
+```
+
