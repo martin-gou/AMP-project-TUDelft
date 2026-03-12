@@ -18,7 +18,7 @@ pts_voxel_layer:
   max_voxels: [8000, 20000]
 
 voxel_encoder:
-  in_channels: 25
+  in_channels: 8
   feat_channels: [64]
   with_distance: FALSE
   voxel_size: ${model.voxel_size}
@@ -105,6 +105,8 @@ fusion:
   image_feat_dim: 64
   fused_image_dim: 16
   point_time_index: 6
+  current_flag_index: 7
+  voxel_feature_dim: 64
   add_img_valid_flag: true
 
 optimizer:

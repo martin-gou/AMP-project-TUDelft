@@ -84,7 +84,7 @@ class ViewOfDelft(Dataset):
         return len(self.sample_list)
 
     def _prepare_image(self, image):
-        image = np.asarray(image)
+        image = np.array(image, copy=True)
         if image.ndim == 2:
             image = np.repeat(image[..., None], 3, axis=2)
         if image.shape[2] > 3:

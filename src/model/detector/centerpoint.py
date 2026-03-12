@@ -65,6 +65,19 @@ class CenterPoint(L.LightningModule):
         self.inference_mode = config.get('inference_mode', 'val')
         self.save_results = config.get('save_preds_results', False)
         self.val_results_list =[]
+
+    def _append_current_sweep_flag(self, points):
+        augmented_points = []
+        for sample_points in points:
+            sample_points = sample_points.to(self.device)
+            if sample_points.numel() == 0:
+                augmented_points.append(sample_points)
+                continue
+            times = sample_points[:, 6]
+            current_time = times[torch.argmin(times.abs())]
+            current_flag = ((times - current_time).abs() <= 1e-4).float().unsqueeze(1)
+            augmented_points.append(torch.cat([sample_points, current_flag], dim=1))
+        return augmented_points
         
     ## Voxelization
     def voxelize(self, points):
@@ -92,8 +105,7 @@ class CenterPoint(L.LightningModule):
         img_feats = None
         if self.image_backbone is not None and imgs is not None and self.use_camera:
             img_feats = self.image_backbone(imgs)
-        if self.point_fusion is not None:
-            pts_data = self.point_fusion(pts_data, img_feats=img_feats, metas=metas)
+        pts_data = self._append_current_sweep_flag(pts_data)
 
         voxel_dict = self.voxelize(pts_data)
     
@@ -102,6 +114,15 @@ class CenterPoint(L.LightningModule):
         coors = voxel_dict['coors']
     
         voxel_features = self.voxel_encoder(voxels, num_points, coors)
+        if self.point_fusion is not None:
+            voxel_features = self.point_fusion(
+                voxel_features,
+                voxels,
+                num_points,
+                coors,
+                img_feats=img_feats,
+                metas=metas,
+            )
         bs = coors[-1,0].item() + 1
         bev_feats = self.middle_encoder(voxel_features, coors, bs)        
         backbone_feats = self.backbone(bev_feats)
