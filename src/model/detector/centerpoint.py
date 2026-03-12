@@ -22,6 +22,7 @@ from src.model.middle_encoders import PointPillarsScatter
 from src.model.backbones import SECOND
 from src.model.necks import SECONDFPN
 from src.model.heads import CenterHead
+from src.model.attention import TemporalVoxelAttention
 from src.model.image_backbones import ImageBackbone
 from src.model.fusion import PointImageFusion
 
@@ -42,6 +43,7 @@ class CenterPoint(L.LightningModule):
         backbone_config = config.get('backbone', None)
         neck_config = config.get('neck', None)
         head_config = config.get('head', None)
+        temporal_attention_config = config.get('temporal_attention', None)
         image_backbone_config = config.get('image_backbone', None)
         fusion_config = config.get('fusion', None)
         self.use_camera = config.get('use_camera', False)
@@ -53,6 +55,7 @@ class CenterPoint(L.LightningModule):
         self.backbone = SECOND(**backbone_config)
         self.neck = SECONDFPN(**neck_config)
         self.head = CenterHead(**head_config)
+        self.temporal_attention = TemporalVoxelAttention(**temporal_attention_config) if temporal_attention_config else None
         self.image_backbone = ImageBackbone(**image_backbone_config) if image_backbone_config else None
         self.point_fusion = PointImageFusion(use_camera=self.use_camera, **fusion_config) if fusion_config else None
         
@@ -114,6 +117,8 @@ class CenterPoint(L.LightningModule):
         coors = voxel_dict['coors']
     
         voxel_features = self.voxel_encoder(voxels, num_points, coors)
+        if self.temporal_attention is not None:
+            voxel_features = self.temporal_attention(voxel_features, voxels, num_points)
         if self.point_fusion is not None:
             voxel_features = self.point_fusion(
                 voxel_features,
