@@ -64,21 +64,35 @@ class ViewOfDelft(Dataset):
         if self.num_sweeps <= 1:
             return
 
-        sweep_root = os.path.join(self.data_root, f'radar_{self.num_sweeps}_scans', 'training')
-        radar_dir = os.path.join(sweep_root, 'velodyne')
-        radar_calib_dir = os.path.join(sweep_root, 'calib')
-        if not os.path.isdir(radar_dir):
-            logging.warning(
-                "Requested %s sweeps but %s was not found. Falling back to single-sweep radar.",
+        candidate_names = [
+            f'radar_{self.num_sweeps}_scans',
+            f'radar_{self.num_sweeps}frames',
+            f'radar_{self.num_sweeps}_frames',
+        ]
+        for candidate_name in candidate_names:
+            sweep_root = os.path.join(self.data_root, candidate_name, 'training')
+            radar_dir = os.path.join(sweep_root, 'velodyne')
+            radar_calib_dir = os.path.join(sweep_root, 'calib')
+            if not os.path.isdir(radar_dir):
+                continue
+
+            self.vod_kitti_locations.radar_dir = radar_dir
+            if os.path.isdir(radar_calib_dir):
+                self.vod_kitti_locations.radar_calib_dir = radar_calib_dir
+            logging.info(
+                "Using %s for %s-sweep radar input.",
+                candidate_name,
                 self.num_sweeps,
-                radar_dir,
             )
-            self.num_sweeps = 1
             return
 
-        self.vod_kitti_locations.radar_dir = radar_dir
-        if os.path.isdir(radar_calib_dir):
-            self.vod_kitti_locations.radar_calib_dir = radar_calib_dir
+        logging.warning(
+            "Requested %s sweeps but none of %s were found under %s. Falling back to single-sweep radar.",
+            self.num_sweeps,
+            candidate_names,
+            self.data_root,
+        )
+        self.num_sweeps = 1
 
     def __len__(self):
         return len(self.sample_list)
