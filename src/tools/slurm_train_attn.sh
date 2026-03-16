@@ -31,7 +31,7 @@ nvidia-smi
 srun python -u src/tools/train.py \
   model=centerpoint_radar_camera_temporal_attn \
   exp_id=centerpoint_radar_camera_temporal_attn_slurm \
-  batch_size=1 \
+  batch_size=3 \
   num_workers=2 \
   epochs=12
 

@@ -14,10 +14,14 @@ class ImageBackbone(nn.Module):
         pretrained=False,
         out_channels=64,
         feature_level='layer2',
+        freeze_bn=False,
+        freeze_backbone=False,
     ):
         super().__init__()
         self.out_channels = out_channels
         self.feature_level = feature_level
+        self.freeze_bn = freeze_bn
+        self.freeze_backbone = freeze_backbone
 
         self.register_buffer(
             'pixel_mean',
@@ -31,6 +35,8 @@ class ImageBackbone(nn.Module):
         )
 
         if models is None:
+            if pretrained:
+                raise RuntimeError('torchvision.models is unavailable, cannot load pretrained image backbone.')
             self.feature_extractor = nn.Sequential(
                 nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1, bias=False),
                 nn.BatchNorm2d(32),
@@ -76,6 +82,27 @@ class ImageBackbone(nn.Module):
 
         self.feature_extractor = nn.Sequential(*feature_layers)
         self.proj = nn.Conv2d(feature_channels, out_channels, kernel_size=1)
+
+        if self.freeze_backbone:
+            for param in self.feature_extractor.parameters():
+                param.requires_grad = False
+        if self.freeze_bn:
+            self._freeze_batch_norm(self.feature_extractor)
+            self._freeze_batch_norm(self.proj)
+
+    def _freeze_batch_norm(self, module):
+        for child in module.modules():
+            if isinstance(child, nn.BatchNorm2d):
+                child.eval()
+                for param in child.parameters():
+                    param.requires_grad = False
+
+    def train(self, mode=True):
+        super().train(mode)
+        if mode and self.freeze_bn:
+            self._freeze_batch_norm(self.feature_extractor)
+            self._freeze_batch_norm(self.proj)
+        return self
 
     def forward(self, images):
         images = (images - self.pixel_mean) / self.pixel_std

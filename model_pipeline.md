@@ -192,3 +192,17 @@ PillarFeatureNet -> TemporalVoxelAttention -> PointImageFusion
 ```
 
 也就是说，当前版和下一版的主要区别不是换 backbone，而是在 scatter 之前先做一层时间感知的 attention refinement。
+
+### attn plus pretrained image variant
+
+在 `next version` 的基础上，还可以直接打开 `torchvision` 的预训练 image backbone：
+
+- 使用 `ResNet18_Weights.DEFAULT`
+- 保持当前 temporal attention 不变
+- 对 image backbone 的 BatchNorm 进行冻结，减小 batch size 1 时的统计量漂移
+
+对应配置文件：
+
+```text
+src/config/model/centerpoint_radar_camera_temporal_attn_pretrained.yaml
+```
