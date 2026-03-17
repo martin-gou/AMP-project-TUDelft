@@ -35,7 +35,7 @@ srun python -u src/tools/train.py \
   exp_id=cvfusion_a100_4h \
   batch_size=2 \
   num_workers=2 \
-  epochs=12 \
+  epochs=80 \
   sync_bn=false \
   val_every=3 \
   log_every=20
