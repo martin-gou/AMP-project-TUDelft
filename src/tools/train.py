@@ -31,6 +31,7 @@ def build_dataset(data_root, split, model_cfg):
 @hydra.main(version_base=None, config_path='../config', config_name='train')    
 def train(cfg: DictConfig)-> None:
     L.seed_everything(cfg.seed, workers=True)
+    torch.set_float32_matmul_precision('high')
     
     train_dataset = build_dataset(cfg.data_root, 'train', cfg.model)
     val_dataset = build_dataset(cfg.data_root, 'val', cfg.model)
@@ -79,6 +80,9 @@ def train(cfg: DictConfig)-> None:
         max_epochs=cfg.epochs,
         sync_batchnorm=cfg.sync_bn,
         enable_model_summary= True,
+        fast_dev_run=cfg.fast_dev_run,
+        limit_train_batches=cfg.limit_train_batches,
+        limit_val_batches=cfg.limit_val_batches,
     )
     
     trainer.fit(model, 

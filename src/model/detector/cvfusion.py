@@ -207,7 +207,7 @@ class CVFusion(CenterPoint):
 
         self.val_results_list.append(dict(
             sample_idx=batch['metas'][0]['num_frame'],
-            input_batch=batch,
+            input_batch={'metas': [batch['metas'][0]]},
             bbox_results=bbox_results,
             losses={key: value.item() if isinstance(value, torch.Tensor) else value for key, value in log_vars.items()},
         ))
@@ -225,7 +225,6 @@ class CVFusion(CenterPoint):
         box_preds = box_preds.new_box(box_preds.tensor.cpu())
         scores = scores.cpu()
         labels = labels.cpu()
-        device = box_preds.tensor.device
         meta = input_batch['metas'][0]
         img_shape = meta.get('ori_img_shape')
         if img_shape is None:
@@ -238,17 +237,18 @@ class CVFusion(CenterPoint):
         corners_img = []
         centers_cam = []
         for box_corners, box_center in zip(box_preds.corners, box_preds.bottom_center):
-            corners_homo = torch.ones((8, 4), device=device)
-            corners_homo[:, :3] = box_corners
+            corners_homo = np.ones((8, 4), dtype=np.float32)
+            corners_homo[:, :3] = box_corners.numpy()
             corners_cam = homogeneous_transformation(corners_homo, local_transforms.t_camera_lidar)
             corners_proj = np.dot(corners_cam, local_transforms.camera_projection_matrix.T)
-            corners_proj = torch.tensor((corners_proj[:, :2].T / corners_proj[:, 2]).T, device=device)
+            corners_proj = (corners_proj[:, :2].T / np.clip(corners_proj[:, 2], a_min=1e-5, a_max=None)).T
+            corners_proj = torch.from_numpy(corners_proj).float()
             corners_img.append(corners_proj)
 
-            center_homo = torch.ones((1, 4), device=device)
-            center_homo[:, :3] = box_center
+            center_homo = np.ones((1, 4), dtype=np.float32)
+            center_homo[:, :3] = box_center.numpy()
             center_cam = homogeneous_transformation(center_homo, local_transforms.t_camera_lidar)
-            centers_cam.append(torch.tensor(center_cam[:, :3], device=device))
+            centers_cam.append(torch.from_numpy(center_cam[:, :3]).float())
 
         if not corners_img:
             return dict(
@@ -266,7 +266,7 @@ class CVFusion(CenterPoint):
         maxxy = torch.max(corners_img, dim=1)[0]
         box_2d_preds = torch.cat([minxy, maxxy], dim=1)
 
-        pc_range = self.pc_range.to(device)
+        pc_range = self.pc_range.cpu()
         valid_cam = (
             (box_2d_preds[:, 0] < img_w)
             & (box_2d_preds[:, 1] < img_h)

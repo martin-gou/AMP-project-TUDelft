@@ -206,7 +206,7 @@ class CenterPoint(L.LightningModule):
         # task0.loss_heatmap', 'task0.loss_bbox', 'task1.loss_heatmap', 'task1.loss_bbox', 'task2.loss_heatmap', 'task2.loss_bbox', 'loss'
         self.val_results_list.append(dict(
             sample_idx = batch['metas'][0]['num_frame'],
-            input_batch = batch,
+            input_batch = {'metas': [batch['metas'][0]]},
             bbox_results = bbox_results,
             losses = log_vars
         ))
@@ -367,7 +367,9 @@ class CenterPoint(L.LightningModule):
         local_transforms = FrameTransformMatrix(vod_frame_data)
         
         box_preds.limit_yaw(offset=0.5, period=np.pi * 2)
-        device = box_preds.tensor.device
+        box_preds = box_preds.new_box(box_preds.tensor.cpu())
+        scores = scores.cpu()
+        labels = labels.cpu()
                 
         box_preds_corners_lidar = box_preds.corners
         box_preds_bottom_center_lidar = box_preds.bottom_center # box_preds.gravity_center
@@ -378,30 +380,31 @@ class CenterPoint(L.LightningModule):
         
         for box_pred_corners, box_pred_bottom_center in zip(box_preds_corners_lidar, box_preds_bottom_center_lidar):
             
-            box_pred_corners_lidar_homo= torch.ones((8,4))
-            box_pred_corners_lidar_homo[:, :3] = box_pred_corners
+            box_pred_corners_lidar_homo = np.ones((8,4), dtype=np.float32)
+            box_pred_corners_lidar_homo[:, :3] = box_pred_corners.numpy()
             box_pred_corners_cam_homo = homogeneous_transformation(box_pred_corners_lidar_homo, local_transforms.t_camera_lidar)
             box_pred_corners_img = np.dot(box_pred_corners_cam_homo, local_transforms.camera_projection_matrix.T)
-            box_pred_corners_img = torch.tensor((box_pred_corners_img[:, :2].T / box_pred_corners_img[:, 2]).T, device=device)
+            box_pred_corners_img = (box_pred_corners_img[:, :2].T / np.clip(box_pred_corners_img[:, 2], a_min=1e-5, a_max=None)).T
+            box_pred_corners_img = torch.from_numpy(box_pred_corners_img).float()
             box_preds_corners_img_list.append(box_pred_corners_img)
 
-            box_pred_bottom_center_lidar_homo = torch.ones((1,4))
-            box_pred_bottom_center_lidar_homo[:, :3] = box_pred_bottom_center
+            box_pred_bottom_center_lidar_homo = np.ones((1,4), dtype=np.float32)
+            box_pred_bottom_center_lidar_homo[:, :3] = box_pred_bottom_center.numpy()
             box_pred_bottom_center_cam_homo = homogeneous_transformation(box_pred_bottom_center_lidar_homo, local_transforms.t_camera_lidar)
-            box_pred_bottom_center_cam = torch.tensor(box_pred_bottom_center_cam_homo[:,:3])
+            box_pred_bottom_center_cam = torch.from_numpy(box_pred_bottom_center_cam_homo[:,:3]).float()
             box_preds_bottom_center_cam_list.append(box_pred_bottom_center_cam)
 
         if box_preds_corners_img_list != []:
             box_preds_corners_img = torch.stack(box_preds_corners_img_list, dim=0)
             assert box_preds_bottom_center_cam_list != []
-            box_preds_bottom_center_cam = torch.cat(box_preds_bottom_center_cam_list, dim=0).to(device)
+            box_preds_bottom_center_cam = torch.cat(box_preds_bottom_center_cam_list, dim=0)
         
             minxy = torch.min(box_preds_corners_img, dim=1)[0]
             maxxy = torch.max(box_preds_corners_img, dim=1)[0]
             box_2d_preds = torch.cat([minxy, maxxy], dim=1)
 
-            self.img_shape = self.img_shape.to(device)
-            self.pc_range = self.pc_range.to(device)
+            self.img_shape = self.img_shape.cpu()
+            self.pc_range = self.pc_range.cpu()
             
             valid_cam_inds = ((box_2d_preds[:, 0] < self.img_shape[0]) & (box_2d_preds[:, 1] < self.img_shape[1]) & (box_2d_preds[:, 2] > 0) & (box_2d_preds[:, 3] > 0))
             valid_pcd_inds = ((box_preds.center > self.pc_range[:3]) & (box_preds.center < self.pc_range[3:]))

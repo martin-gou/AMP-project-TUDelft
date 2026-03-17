@@ -18,10 +18,12 @@ gpus: [0] # will change in code: torch.cuda.device_count()
 sync_bn: true
 batch_size: 2
 epochs: 80
+fast_dev_run: false
+limit_train_batches: 1.0
+limit_val_batches: 1.0
 
 # log settings
 log_every: 50
 val_every: 3
 save_top_model: 5
-
 

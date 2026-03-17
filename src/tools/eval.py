@@ -32,6 +32,7 @@ def build_dataset(data_root, split, model_cfg):
 def eval(cfg: DictConfig) -> None:
     print('Evaluating model...')
     L.seed_everything(cfg.seed, workers=True)
+    torch.set_float32_matmul_precision('high')
 
     checkpoint = torch.load(cfg.checkpoint_path, weights_only=False)
     checkpoint_params = DictConfig(checkpoint["hyper_parameters"])
