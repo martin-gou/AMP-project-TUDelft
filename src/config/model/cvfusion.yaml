@@ -142,5 +142,5 @@ loss_weights:
   stage2_bbox: 1.0
 
 optimizer:
-  lr: 0.001
+  lr: 0.01
   weight_decay: 0.01
