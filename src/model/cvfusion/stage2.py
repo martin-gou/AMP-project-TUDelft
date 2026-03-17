@@ -2,8 +2,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from src.model.utils.box3d_utils import circle_nms
+from src.model.utils.box3d_utils import circle_nms, xywhr2xyxyr
 from src.model.utils.lidar_box3d import LiDARInstance3DBoxes
+from src.ops import nms_gpu
 
 from .utils import (
     boxes_to_local,
@@ -318,6 +319,20 @@ class CVFusionProposalRefiner(nn.Module):
         )
         self.refine_head = ProposalRefinementHead(num_classes=num_classes, **refine_cfg)
 
+    def _merge_image_pyramid(self, image_feats):
+        fused = image_feats[0]
+        if len(image_feats) == 1:
+            return fused
+        merged = fused
+        for feat in image_feats[1:]:
+            merged = merged + F.interpolate(
+                feat,
+                size=fused.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            )
+        return merged / float(len(image_feats))
+
     def _jitter_boxes(self, boxes):
         if boxes.numel() == 0:
             return boxes
@@ -374,7 +389,7 @@ class CVFusionProposalRefiner(nn.Module):
 
     def forward(self, proposals, points, image_feats, bev_feat, metas):
         outputs = []
-        image_feat = image_feats[0]
+        image_feat = self._merge_image_pyramid(image_feats)
         for batch_idx, proposal in enumerate(proposals):
             boxes = proposal['boxes']
             if boxes.numel() == 0:
@@ -481,8 +496,9 @@ class CVFusionProposalRefiner(nn.Module):
                     labels=proposal['labels'].new_zeros((0,)),
                 ))
                 continue
-            refined_boxes = decode_box_deltas(boxes, output['delta'])
-            refined_scores = proposal['scores'] * torch.sigmoid(output['quality'].squeeze(-1))
+            quality = torch.sigmoid(output['quality'].squeeze(-1))
+            refined_boxes = decode_box_deltas(boxes, output['delta'] * quality.unsqueeze(-1))
+            refined_scores = torch.sqrt(proposal['scores'].clamp(min=0.0) * quality.clamp(min=0.0))
             predictions.append(dict(
                 boxes=refined_boxes,
                 scores=refined_scores,
@@ -490,7 +506,7 @@ class CVFusionProposalRefiner(nn.Module):
             ))
         return predictions
 
-    def postprocess(self, predictions, min_radius, score_threshold=0.05, post_max_size=83):
+    def postprocess(self, predictions, min_radius, score_threshold=0.05, post_max_size=83, nms_thr=0.01):
         final_results = []
         for pred in predictions:
             boxes = pred['boxes']
@@ -515,6 +531,18 @@ class CVFusionProposalRefiner(nn.Module):
                 class_scores = scores[class_mask]
                 if class_boxes.numel() == 0:
                     continue
+                class_indices = torch.nonzero(class_mask, as_tuple=False).squeeze(1)
+                if class_boxes.device.type == 'cuda':
+                    boxes_for_nms = xywhr2xyxyr(LiDARInstance3DBoxes(class_boxes, box_dim=7).bev)
+                    keep_local = nms_gpu(
+                        boxes_for_nms,
+                        class_scores,
+                        thresh=nms_thr,
+                        post_max_size=post_max_size,
+                    )
+                    keep_indices.append(class_indices[keep_local])
+                    continue
+
                 dets = torch.cat([class_boxes[:, :2], class_scores.unsqueeze(-1)], dim=-1)
                 keep_local = torch.tensor(
                     circle_nms(
@@ -525,7 +553,6 @@ class CVFusionProposalRefiner(nn.Module):
                     dtype=torch.long,
                     device=boxes.device,
                 )
-                class_indices = torch.nonzero(class_mask, as_tuple=False).squeeze(1)
                 keep_indices.append(class_indices[keep_local])
 
             if keep_indices:

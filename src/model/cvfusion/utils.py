@@ -42,7 +42,7 @@ def build_bev_reference_points(shape, point_cloud_range, heights, device, dtype)
     return torch.cat(all_points, dim=0)
 
 
-def project_points_to_image(points: Tensor, meta: dict):
+def project_points_to_image(points: Tensor, meta: dict, return_depth: bool = False):
     device = points.device
     dtype = points.dtype
     point_homo = torch.cat([points, torch.ones((points.size(0), 1), device=device, dtype=dtype)], dim=1)
@@ -52,7 +52,11 @@ def project_points_to_image(points: Tensor, meta: dict):
     img_shape = meta_to_tensor(meta.get('img_shape'), device, dtype=dtype)
     ori_img_shape = meta_to_tensor(meta.get('ori_img_shape'), device, dtype=dtype)
     if t_camera_radar is None or camera_projection is None or img_shape is None:
-        return points.new_zeros((points.size(0), 2)), points.new_zeros(points.size(0), dtype=torch.bool)
+        empty_grid = points.new_zeros((points.size(0), 2))
+        empty_valid = points.new_zeros(points.size(0), dtype=torch.bool)
+        if return_depth:
+            return empty_grid, empty_valid, points.new_zeros(points.size(0))
+        return empty_grid, empty_valid
 
     camera_points = point_homo @ t_camera_radar.t()
     depth = camera_points[:, 2]
@@ -74,7 +78,10 @@ def project_points_to_image(points: Tensor, meta: dict):
 
     grid_x = 2.0 * (uv[:, 0] / max(img_w - 1, 1.0)) - 1.0
     grid_y = 2.0 * (uv[:, 1] / max(img_h - 1, 1.0)) - 1.0
-    return torch.stack([grid_x, grid_y], dim=-1), valid
+    grid = torch.stack([grid_x, grid_y], dim=-1)
+    if return_depth:
+        return grid, valid, depth
+    return grid, valid
 
 
 def normalize_bev_points(points_xy: Tensor, point_cloud_range):
@@ -158,4 +165,3 @@ def pairwise_bev_iou(boxes_a: Tensor, boxes_b: Tensor):
     area_b = (bev_b[:, 2] - bev_b[:, 0]).clamp(min=0) * (bev_b[:, 3] - bev_b[:, 1]).clamp(min=0)
     union = area_a[:, None] + area_b[None, :] - inter_area
     return inter_area / union.clamp(min=1e-6)
-

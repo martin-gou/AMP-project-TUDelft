@@ -19,7 +19,7 @@ pts_voxel_layer:
   max_voxels: [8000, 20000]
 
 voxel_encoder:
-  in_channels: 7
+  in_channels: 8
   feat_channels: [64]
   with_distance: FALSE
   voxel_size: ${model.voxel_size}
@@ -91,10 +91,10 @@ head:
     min_radius: [4, 0.3, 0.85]
     score_threshold: 0.1
     out_size_factor: 2
-    nms_type: 'circle'
+    nms_type: 'rotate'
     pre_max_size: 1000
-    post_max_size: 83
-    nms_thr: 0.2
+    post_max_size: 128
+    nms_thr: 0.01
 
 stage1:
   image_backbone:
@@ -105,13 +105,13 @@ stage1:
     freeze_bn: true
     freeze_backbone: false
   bev_lifter:
-    sample_heights: [0.0, 1.0, 2.0]
+    sample_heights: [-2.0, -1.0, 0.0, 1.0, 2.0]
     min_depth: 0.1
   rg_iter_fusion: {}
 
 stage2:
   max_train_proposals: 96
-  max_test_proposals: 64
+  max_test_proposals: 96
   proposal_score_threshold: 0.05
   append_gt_proposals: true
   gt_center_noise: 0.35
@@ -119,18 +119,18 @@ stage2:
   gt_yaw_noise: 0.15
   pos_iou_thr: 0.55
   neg_iou_thr: 0.25
-  final_score_threshold: 0.05
+  final_score_threshold: 0.1
   pgf:
-    point_in_channels: 7
+    point_in_channels: 8
     hidden_dim: 128
-    max_points: 32
-    num_samples: 4
+    max_points: 48
+    num_samples: 8
     offset_scale: 0.04
   ggf:
     hidden_dim: 128
-    grid_size: 3
-    num_samples_fv: 4
-    num_samples_bev: 4
+    grid_size: 6
+    num_samples_fv: 8
+    num_samples_bev: 8
     fv_offset_scale: 0.04
     bev_offset_scale: 0.08
   refine_head:

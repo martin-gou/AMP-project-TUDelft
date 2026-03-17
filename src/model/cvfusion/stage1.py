@@ -141,13 +141,34 @@ class CrossViewBEVLifter(nn.Module):
     def __init__(
         self,
         point_cloud_range,
+        feat_channels=96,
         sample_heights=(0.0, 1.0, 2.0),
         min_depth=1e-3,
+        score_hidden_dim=64,
     ):
         super().__init__()
         self.point_cloud_range = list(point_cloud_range)
         self.sample_heights = list(sample_heights)
         self.min_depth = float(min_depth)
+        self.feat_channels = int(feat_channels)
+        self.register_parameter(
+            'height_embedding',
+            nn.Parameter(torch.zeros(len(self.sample_heights), self.feat_channels)),
+        )
+        self.depth_encoder = nn.Sequential(
+            nn.Linear(1, score_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(score_hidden_dim, self.feat_channels),
+        )
+        self.score_head = nn.Sequential(
+            nn.Linear(self.feat_channels, score_hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(score_hidden_dim, 1),
+        )
+        self.post_fusion = nn.Sequential(
+            ConvBNReLU(self.feat_channels, self.feat_channels, kernel_size=3, stride=1, padding=1),
+            ConvBNReLU(self.feat_channels, self.feat_channels, kernel_size=3, stride=1, padding=1),
+        )
 
     def _sample_single_feature(self, image_feat, meta, target_shape):
         height, width = target_shape
@@ -160,7 +181,7 @@ class CrossViewBEVLifter(nn.Module):
             device,
             dtype,
         )
-        grid, valid = project_points_to_image(reference_points, meta)
+        grid, valid, depth = project_points_to_image(reference_points, meta, return_depth=True)
         sampled = F.grid_sample(
             image_feat.unsqueeze(0),
             grid.reshape(1, -1, 1, 2),
@@ -175,8 +196,20 @@ class CrossViewBEVLifter(nn.Module):
         num_heights = len(self.sample_heights)
         sampled = sampled.reshape(num_heights, num_cells, -1).permute(1, 0, 2)
         valid = valid.reshape(num_heights, num_cells).permute(1, 0).unsqueeze(-1)
-        fused = sampled.sum(dim=1) / valid.sum(dim=1).clamp(min=1)
-        return fused.reshape(height, width, -1).permute(2, 0, 1)
+        depth = torch.log1p(depth.clamp(min=self.min_depth))
+        depth = depth.reshape(num_heights, num_cells, 1).permute(1, 0, 2)
+        depth_feat = self.depth_encoder(depth)
+
+        tokens = sampled + depth_feat + self.height_embedding.unsqueeze(0).to(device=device, dtype=dtype)
+        logits = self.score_head(tokens).squeeze(-1)
+        logits = logits.masked_fill(~valid.squeeze(-1), float('-inf'))
+        has_valid = valid.any(dim=1)
+        logits = torch.where(has_valid, logits, logits.new_zeros(logits.shape))
+        weights = torch.softmax(logits, dim=1)
+        weights = torch.where(has_valid, weights, weights.new_zeros(weights.shape))
+        fused = (sampled * weights.unsqueeze(-1)).sum(dim=1)
+        fused = fused.reshape(height, width, -1).permute(2, 0, 1).unsqueeze(0)
+        return self.post_fusion(fused).squeeze(0)
 
     def forward(self, image_feats, metas, target_shapes: Iterable):
         outputs = []
@@ -199,14 +232,21 @@ class RGIterBEVFusion(nn.Module):
         ])
         self.occupancy_heads = nn.ModuleList([
             nn.Sequential(
-                ConvBNReLU(channels, channels, kernel_size=3, stride=1, padding=1),
+                ConvBNReLU(channels * 2, channels, kernel_size=3, stride=1, padding=1),
                 nn.Conv2d(channels, 1, kernel_size=1),
+            )
+            for channels in self.radar_channels
+        ])
+        self.cross_gate_heads = nn.ModuleList([
+            nn.Sequential(
+                ConvBNReLU(channels * 2, channels, kernel_size=3, stride=1, padding=1),
+                nn.Conv2d(channels, channels, kernel_size=1),
             )
             for channels in self.radar_channels
         ])
         self.fusion_blocks = nn.ModuleList([
             nn.Sequential(
-                ConvBNReLU(channels * 2, channels, kernel_size=3, stride=1, padding=1),
+                ConvBNReLU(channels * 3, channels, kernel_size=3, stride=1, padding=1),
                 ConvBNReLU(channels, channels, kernel_size=3, stride=1, padding=1),
             )
             for channels in self.radar_channels
@@ -236,10 +276,15 @@ class RGIterBEVFusion(nn.Module):
                 )
                 camera_feat = camera_feat + propagated
 
-            occupancy = torch.sigmoid(self.occupancy_heads[idx](radar_feat))
+            occupancy_input = torch.cat([radar_feat, camera_feat], dim=1)
+            occupancy = torch.sigmoid(self.occupancy_heads[idx](occupancy_input))
             gated_camera = camera_feat * occupancy
-            fused = radar_feat + self.fusion_blocks[idx](torch.cat([radar_feat, gated_camera], dim=1))
-            propagated_state = self.state_blocks[idx](gated_camera)
+            cross_gate = torch.sigmoid(self.cross_gate_heads[idx](occupancy_input))
+            cross_response = radar_feat * cross_gate
+            fusion_input = torch.cat([radar_feat, gated_camera, cross_response], dim=1)
+            fused = radar_feat + self.fusion_blocks[idx](fusion_input)
+            fused = fused + self.state_blocks[idx](fused * occupancy)
+            propagated_state = fused
             fused_feats.append(fused)
             occupancy_maps.append(occupancy)
         return tuple(fused_feats), occupancy_maps

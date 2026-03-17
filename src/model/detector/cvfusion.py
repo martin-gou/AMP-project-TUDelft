@@ -28,6 +28,7 @@ class CVFusion(CenterPoint):
         self.image_backbone = CVFusionImageBackbone(**image_cfg)
         radar_channels = list(config.get('backbone', {}).get('out_channels', []))
         camera_channels = int(image_cfg.get('out_channels', 96))
+        lifter_cfg.setdefault('feat_channels', camera_channels)
         self.bev_lifter = CrossViewBEVLifter(
             point_cloud_range=config.get('point_cloud_range'),
             **lifter_cfg,
@@ -107,7 +108,8 @@ class CVFusion(CenterPoint):
             return self.head.get_bboxes(stage1_preds, img_metas=metas)
 
     def _forward_cvfusion(self, pts_data, imgs, metas, gt_bboxes_3d=None, gt_labels_3d=None, training=False):
-        features = self._forward_stage1(pts_data, imgs, metas)
+        pts_with_flag = self._append_current_sweep_flag(pts_data)
+        features = self._forward_stage1(pts_with_flag, imgs, metas)
         stage1_dets = self._decode_stage1(features['stage1_preds'], metas)
         proposals = self.proposal_refiner.build_proposals(
             stage1_dets,
@@ -117,7 +119,7 @@ class CVFusion(CenterPoint):
         )
         refine_outputs = self.proposal_refiner(
             proposals,
-            pts_data,
+            pts_with_flag,
             features['image_feats'],
             features['neck_feats'][0],
             metas,
@@ -128,6 +130,7 @@ class CVFusion(CenterPoint):
             min_radius=self.head.test_cfg['min_radius'],
             score_threshold=self.final_score_threshold,
             post_max_size=self.head.test_cfg['post_max_size'],
+            nms_thr=self.head.test_cfg.get('nms_thr', 0.01),
         )
         return features, stage1_dets, proposals, refine_outputs, refined_bbox_list
 
