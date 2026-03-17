@@ -367,7 +367,11 @@ class CenterPoint(L.LightningModule):
         local_transforms = FrameTransformMatrix(vod_frame_data)
         
         box_preds.limit_yaw(offset=0.5, period=np.pi * 2)
-        box_preds = box_preds.new_box(box_preds.tensor.cpu())
+        box_preds = type(box_preds)(
+            box_preds.tensor.detach().cpu(),
+            box_dim=box_preds.box_dim,
+            with_yaw=box_preds.with_yaw,
+        )
         scores = scores.cpu()
         labels = labels.cpu()
                 
@@ -381,7 +385,7 @@ class CenterPoint(L.LightningModule):
         for box_pred_corners, box_pred_bottom_center in zip(box_preds_corners_lidar, box_preds_bottom_center_lidar):
             
             box_pred_corners_lidar_homo = np.ones((8,4), dtype=np.float32)
-            box_pred_corners_lidar_homo[:, :3] = box_pred_corners.numpy()
+            box_pred_corners_lidar_homo[:, :3] = box_pred_corners.detach().cpu().numpy()
             box_pred_corners_cam_homo = homogeneous_transformation(box_pred_corners_lidar_homo, local_transforms.t_camera_lidar)
             box_pred_corners_img = np.dot(box_pred_corners_cam_homo, local_transforms.camera_projection_matrix.T)
             box_pred_corners_img = (box_pred_corners_img[:, :2].T / np.clip(box_pred_corners_img[:, 2], a_min=1e-5, a_max=None)).T
@@ -389,7 +393,7 @@ class CenterPoint(L.LightningModule):
             box_preds_corners_img_list.append(box_pred_corners_img)
 
             box_pred_bottom_center_lidar_homo = np.ones((1,4), dtype=np.float32)
-            box_pred_bottom_center_lidar_homo[:, :3] = box_pred_bottom_center.numpy()
+            box_pred_bottom_center_lidar_homo[:, :3] = box_pred_bottom_center.detach().cpu().numpy()
             box_pred_bottom_center_cam_homo = homogeneous_transformation(box_pred_bottom_center_lidar_homo, local_transforms.t_camera_lidar)
             box_pred_bottom_center_cam = torch.from_numpy(box_pred_bottom_center_cam_homo[:,:3]).float()
             box_preds_bottom_center_cam_list.append(box_pred_bottom_center_cam)

@@ -222,7 +222,11 @@ class CVFusion(CenterPoint):
         local_transforms = FrameTransformMatrix(vod_frame_data)
 
         box_preds.limit_yaw(offset=0.5, period=np.pi * 2)
-        box_preds = box_preds.new_box(box_preds.tensor.cpu())
+        box_preds = type(box_preds)(
+            box_preds.tensor.detach().cpu(),
+            box_dim=box_preds.box_dim,
+            with_yaw=box_preds.with_yaw,
+        )
         scores = scores.cpu()
         labels = labels.cpu()
         meta = input_batch['metas'][0]
@@ -238,7 +242,7 @@ class CVFusion(CenterPoint):
         centers_cam = []
         for box_corners, box_center in zip(box_preds.corners, box_preds.bottom_center):
             corners_homo = np.ones((8, 4), dtype=np.float32)
-            corners_homo[:, :3] = box_corners.numpy()
+            corners_homo[:, :3] = box_corners.detach().cpu().numpy()
             corners_cam = homogeneous_transformation(corners_homo, local_transforms.t_camera_lidar)
             corners_proj = np.dot(corners_cam, local_transforms.camera_projection_matrix.T)
             corners_proj = (corners_proj[:, :2].T / np.clip(corners_proj[:, 2], a_min=1e-5, a_max=None)).T
@@ -246,7 +250,7 @@ class CVFusion(CenterPoint):
             corners_img.append(corners_proj)
 
             center_homo = np.ones((1, 4), dtype=np.float32)
-            center_homo[:, :3] = box_center.numpy()
+            center_homo[:, :3] = box_center.detach().cpu().numpy()
             center_cam = homogeneous_transformation(center_homo, local_transforms.t_camera_lidar)
             centers_cam.append(torch.from_numpy(center_cam[:, :3]).float())
 
