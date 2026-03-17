@@ -9,7 +9,7 @@ voxel_size: [0.32, 0.32, 5]
 output_dir: ${output_dir}
 
 use_camera: true
-num_sweeps: 1
+num_sweeps: 3
 image_size: [384, 640]
 
 pts_voxel_layer:
@@ -99,10 +99,10 @@ head:
 stage1:
   image_backbone:
     name: resnet18
-    pretrained: false
+    pretrained: true
     out_channels: 96
     feature_levels: [layer2, layer3, layer4]
-    freeze_bn: false
+    freeze_bn: true
     freeze_backbone: false
   bev_lifter:
     sample_heights: [0.0, 1.0, 2.0]
@@ -142,5 +142,5 @@ loss_weights:
   stage2_bbox: 1.0
 
 optimizer:
-  lr: 0.01
+  lr: 0.001
   weight_decay: 0.01
