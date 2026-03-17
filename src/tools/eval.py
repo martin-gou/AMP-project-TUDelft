@@ -14,7 +14,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 import torch
 from torch.utils.data import DataLoader
 
-from src.model.detector import CenterPoint
+from src.model.detector import get_detector_class
 from src.dataset import ViewOfDelft, collate_vod_batch
 
 
@@ -46,7 +46,8 @@ def eval(cfg: DictConfig) -> None:
                                 shuffle=False,
                                 collate_fn=collate_vod_batch)
     
-    model = CenterPoint.load_from_checkpoint(checkpoint_path=cfg.checkpoint_path)
+    detector_class = get_detector_class(model_cfg)
+    model = detector_class.load_from_checkpoint(checkpoint_path=cfg.checkpoint_path, config=model_cfg)
     model.eval()
     
     trainer = L.Trainer(

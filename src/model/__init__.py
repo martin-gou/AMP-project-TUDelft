@@ -3,4 +3,4 @@ from .middle_encoders import PointPillarsScatter
 from .backbones import SECOND
 from .necks import SECONDFPN
 from .heads import CenterHead
-from .detector import CenterPoint
+from .detector import CenterPoint, CVFusion, build_detector, get_detector_class

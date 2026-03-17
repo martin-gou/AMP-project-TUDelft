@@ -1,5 +1,5 @@
 defaults: 
-  - model: centerpoint_radar
+  - model: cvfusion
   - _self_
 
 seed: 47020
@@ -23,6 +23,5 @@ epochs: 80
 log_every: 50
 val_every: 3
 save_top_model: 5
-
 
 

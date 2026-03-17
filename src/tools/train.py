@@ -15,7 +15,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 
 import torch
 from torch.utils.data import DataLoader
-from src.model.detector import CenterPoint
+from src.model.detector import build_detector
 from src.dataset import ViewOfDelft, collate_vod_batch
 
 
@@ -45,7 +45,7 @@ def train(cfg: DictConfig)-> None:
                                 num_workers=cfg.num_workers, 
                                 shuffle=False,
                                 collate_fn=collate_vod_batch)
-    model = CenterPoint(cfg.model)
+    model = build_detector(cfg.model)
     callbacks = [
         ModelCheckpoint(
             dirpath=osp.join(cfg.output_dir, "checkpoints"),
