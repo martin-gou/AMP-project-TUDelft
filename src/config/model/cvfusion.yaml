@@ -29,6 +29,22 @@ middle_encoder:
   in_channels: 64
   output_shape: [160, 160]
 
+temporal_attention:
+  voxel_feature_dim: 64
+  point_feature_dim: 8
+  current_flag_index: 7
+  num_heads: 4
+  dropout: 0.0
+  use_history_gate: true
+
+fusion:
+  image_feat_dim: 96
+  fused_image_dim: 24
+  point_time_index: 6
+  current_flag_index: 7
+  voxel_feature_dim: 64
+  add_img_valid_flag: true
+
 backbone:
   in_channels: 64
   layer_nums: [3, 5, 5]
@@ -103,7 +119,7 @@ stage1:
     out_channels: 96
     feature_levels: [layer2, layer3, layer4]
     freeze_bn: true
-    freeze_backbone: false
+    freeze_backbone: true
   bev_lifter:
     sample_heights: [-2.0, -1.0, 0.0, 1.0, 2.0]
     min_depth: 0.1
@@ -112,7 +128,10 @@ stage1:
 stage2:
   max_train_proposals: 96
   max_test_proposals: 96
-  proposal_score_threshold: 0.05
+  proposal_score_threshold: 0.01
+  proposal_decode_threshold: 0.01
+  proposal_decode_post_max_size: 256
+  proposal_decode_nms_thr: 0.2
   append_gt_proposals: true
   gt_center_noise: 0.35
   gt_size_noise: 0.10

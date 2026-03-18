@@ -3,6 +3,7 @@ from collections import OrderedDict
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 
 from vod.frame import FrameDataLoader, FrameTransformMatrix, homogeneous_transformation
 
@@ -41,6 +42,9 @@ class CVFusion(CenterPoint):
 
         neck_out_channels = config.get('neck', {}).get('out_channels', [])
         bev_feat_dim = neck_out_channels if isinstance(neck_out_channels, int) else sum(neck_out_channels)
+        self.proposal_decode_threshold = float(stage2_cfg.pop('proposal_decode_threshold', 0.01))
+        self.proposal_decode_post_max_size = int(stage2_cfg.pop('proposal_decode_post_max_size', 256))
+        self.proposal_decode_nms_thr = float(stage2_cfg.pop('proposal_decode_nms_thr', 0.2))
         self.final_score_threshold = float(
             stage2_cfg.pop('final_score_threshold', self.head.test_cfg.get('score_threshold', 0.1))
         )
@@ -75,21 +79,47 @@ class CVFusion(CenterPoint):
                 synced[loss_name] = loss_value
         return synced
 
+    def _merge_image_pyramid(self, image_feats):
+        fused = image_feats[0]
+        if len(image_feats) == 1:
+            return fused
+        merged = fused
+        for feat in image_feats[1:]:
+            merged = merged + F.interpolate(
+                feat,
+                size=fused.shape[-2:],
+                mode='bilinear',
+                align_corners=False,
+            )
+        return merged / float(len(image_feats))
+
     def _forward_stage1(self, pts_data, imgs, metas):
         if imgs is None:
             raise ValueError('CVFusion expects images in the batch.')
 
+        image_feats = self.image_backbone(imgs)
+        fused_image_feat = self._merge_image_pyramid(image_feats)
         voxel_dict = self.voxelize(pts_data)
         voxels = voxel_dict['voxels']
         num_points = voxel_dict['num_points']
         coors = voxel_dict['coors']
 
         voxel_features = self.voxel_encoder(voxels, num_points, coors)
+        if self.temporal_attention is not None:
+            voxel_features = self.temporal_attention(voxel_features, voxels, num_points)
+        if self.point_fusion is not None:
+            voxel_features = self.point_fusion(
+                voxel_features,
+                voxels,
+                num_points,
+                coors,
+                img_feats=fused_image_feat,
+                metas=metas,
+            )
         batch_size = int(coors[-1, 0].item()) + 1
         radar_bev = self.middle_encoder(voxel_features, coors, batch_size)
         radar_feats = self.backbone(radar_bev)
 
-        image_feats = self.image_backbone(imgs)
         target_shapes = [feat.shape[-2:] for feat in radar_feats]
         camera_bev_feats = self.bev_lifter(image_feats, metas, target_shapes)
         fused_feats, occupancy_maps = self.rg_iter_fusion(radar_feats, camera_bev_feats)
@@ -103,14 +133,28 @@ class CVFusion(CenterPoint):
             occupancy_maps=occupancy_maps,
         )
 
-    def _decode_stage1(self, stage1_preds, metas):
+    def _decode_stage1(self, stage1_preds, metas, proposal_mode=False):
         with torch.no_grad():
-            return self.head.get_bboxes(stage1_preds, img_metas=metas)
+            if not proposal_mode:
+                return self.head.get_bboxes(stage1_preds, img_metas=metas)
+
+            original_score_threshold = self.head.test_cfg.get('score_threshold', 0.1)
+            original_post_max_size = self.head.test_cfg.get('post_max_size', 83)
+            original_nms_thr = self.head.test_cfg.get('nms_thr', 0.2)
+            self.head.test_cfg['score_threshold'] = self.proposal_decode_threshold
+            self.head.test_cfg['post_max_size'] = self.proposal_decode_post_max_size
+            self.head.test_cfg['nms_thr'] = self.proposal_decode_nms_thr
+            try:
+                return self.head.get_bboxes(stage1_preds, img_metas=metas)
+            finally:
+                self.head.test_cfg['score_threshold'] = original_score_threshold
+                self.head.test_cfg['post_max_size'] = original_post_max_size
+                self.head.test_cfg['nms_thr'] = original_nms_thr
 
     def _forward_cvfusion(self, pts_data, imgs, metas, gt_bboxes_3d=None, gt_labels_3d=None, training=False):
         pts_with_flag = self._append_current_sweep_flag(pts_data)
         features = self._forward_stage1(pts_with_flag, imgs, metas)
-        stage1_dets = self._decode_stage1(features['stage1_preds'], metas)
+        stage1_dets = self._decode_stage1(features['stage1_preds'], metas, proposal_mode=True)
         proposals = self.proposal_refiner.build_proposals(
             stage1_dets,
             gt_bboxes_3d=gt_bboxes_3d,

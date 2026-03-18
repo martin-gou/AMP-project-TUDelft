@@ -3,19 +3,18 @@
 #SBATCH --partition=gpu-a100-small
 #SBATCH --time=4:00:00
 #
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem-per-cpu=4G
 #SBATCH --gpus-per-task=1
 #SBATCH --account=education-me-courses-ro47020
 #SBATCH --mail-type=END
-#SBATCH --output=outputs/slurm_cvfusion_stable_%j.out
-#SBATCH --error=outputs/slurm_cvfusion_stable_%j.err
+#SBATCH --output=slurm_cvfusion_stable_%j.out
+#SBATCH --error=slurm_cvfusion_stable_%j.err
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
 cd "$REPO_ROOT"
 
 mkdir -p outputs
