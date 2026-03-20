@@ -8,6 +8,59 @@ from torch.utils.data import Dataset
 from vod.configuration import KittiLocations
 from vod.frame import FrameDataLoader, FrameTransformMatrix, homogeneous_transformation
 
+
+def _rotation_matrix_z(angle):
+    """Return 3x3 rotation matrix around z-axis."""
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array([[c, -s, 0],
+                     [s,  c, 0],
+                     [0,  0, 1]], dtype=np.float32)
+
+
+def augment_data(points, gt_bboxes, gt_labels):
+    """Apply training-time augmentations to points and GT boxes.
+
+    Augmentations (applied in order):
+      1. Random horizontal flip (y-axis)
+      2. Random rotation around z-axis (±π/4)
+      3. Random scaling (0.95–1.05)
+      4. Small Gaussian noise on point positions
+
+    Args:
+        points: (N, C) numpy array – first 3 cols are x, y, z
+        gt_bboxes: (M, 7) numpy array – [x, y, z, l, w, h, yaw]
+        gt_labels: (M,) numpy array
+    Returns:
+        points, gt_bboxes (modified in-place or copied)
+    """
+    points = points.copy()
+    gt_bboxes = gt_bboxes.copy()
+
+    # 1. Random horizontal flip (flip y-axis)
+    if np.random.rand() < 0.5:
+        points[:, 1] = -points[:, 1]
+        gt_bboxes[:, 1] = -gt_bboxes[:, 1]
+        gt_bboxes[:, 6] = -gt_bboxes[:, 6]  # negate yaw
+
+    # 2. Random rotation around z-axis
+    rot_angle = np.random.uniform(-np.pi / 4, np.pi / 4)
+    rot_mat = _rotation_matrix_z(rot_angle)
+    points[:, :3] = points[:, :3] @ rot_mat.T
+    gt_bboxes[:, :3] = gt_bboxes[:, :3] @ rot_mat.T
+    gt_bboxes[:, 6] += rot_angle
+
+    # 3. Random scaling
+    scale = np.random.uniform(0.95, 1.05)
+    points[:, :3] *= scale
+    gt_bboxes[:, :3] *= scale
+    gt_bboxes[:, 3:6] *= scale  # scale dimensions
+
+    # 4. Small Gaussian noise on point positions
+    points[:, :3] += np.random.normal(0, 0.02, size=points[:, :3].shape).astype(np.float32)
+
+    return points, gt_bboxes
+
+
 class ViewOfDelft(Dataset):
     CLASSES = ['Car', 
                'Pedestrian', 
@@ -84,15 +137,20 @@ class ViewOfDelft(Dataset):
                 
                     gt_bboxes_3d_list.append(np.concatenate([bbox3d_locs, bbox3d_dims, bbox3d_rot], axis=0))
 
-        radar_data = torch.tensor(radar_data)
-        
         if gt_bboxes_3d_list == []:
             gt_labels_3d = np.array([0])
             gt_bboxes_3d = np.zeros((1,7))
         else:
             gt_labels_3d = np.array(gt_labels_3d_list, dtype=np.int64)
             gt_bboxes_3d = np.stack(gt_bboxes_3d_list, axis=0)
-        
+
+        # Apply data augmentation during training
+        if self.split == 'train' and len(gt_bboxes_3d_list) > 0:
+            radar_data, gt_bboxes_3d = augment_data(
+                radar_data, gt_bboxes_3d, gt_labels_3d)
+
+        radar_data = torch.as_tensor(radar_data, dtype=torch.float32)
+
         gt_bboxes_3d = LiDARInstance3DBoxes(
             gt_bboxes_3d,
             box_dim=gt_bboxes_3d.shape[-1],
