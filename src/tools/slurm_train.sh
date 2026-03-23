@@ -18,7 +18,7 @@ module load 2024r1 miniconda3/4.12.0 cuda/12.5
 unset CONDA_SHLVL
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate amp
-
+export WANDB_MODE=offline
 previous=$(nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/tail -n '+2')
 nvidia-smi
 

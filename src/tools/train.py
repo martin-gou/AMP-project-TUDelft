@@ -75,7 +75,7 @@ def train(cfg: DictConfig)-> None:
                 train_dataloaders=train_dataloader,
                 val_dataloaders=val_dataloader,
                 ckpt_path=cfg.checkpoint_path)
-    wandb.finish()
+    # wandb.finish()
     
 if __name__ == '__main__':
     train()
