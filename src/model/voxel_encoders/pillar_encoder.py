@@ -3,6 +3,27 @@ from torch import nn
 
 from .utils import PFNLayer, get_paddings_indicator
 
+
+class PointFeatureChannelGate(nn.Module):
+    """Lightweight SE-style gate for point features inside each pillar."""
+
+    def __init__(self, channels, reduction=4):
+        super().__init__()
+        hidden_channels = max(channels // reduction, 1)
+        self.net = nn.Sequential(
+            nn.Linear(channels, hidden_channels, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_channels, channels, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, features, num_points):
+        valid_points = num_points.type_as(features).view(-1, 1).clamp_min(1)
+        pooled = features.sum(dim=1) / valid_points
+        gate = self.net(pooled).unsqueeze(1)
+        return features * gate
+
+
 class PillarFeatureNet(nn.Module):
     """Pillar Feature Net.
 
@@ -16,6 +37,11 @@ class PillarFeatureNet(nn.Module):
             N PFNLayers. Defaults to (64, ).
         with_distance (bool, optional): Whether to include Euclidean distance
             to points. Defaults to False.
+        use_feature_gate (bool, optional): Whether to apply a lightweight
+            channel gate on decorated point features before PFN aggregation.
+            Defaults to False.
+        feature_gate_reduction (int, optional): Reduction ratio for the
+            bottleneck in the channel gate. Defaults to 4.
         with_cluster_center (bool, optional): [description]. Defaults to True.
         with_voxel_center (bool, optional): [description]. Defaults to True.
         voxel_size (tuple[float], optional): Size of voxels, only utilize x
@@ -32,6 +58,8 @@ class PillarFeatureNet(nn.Module):
                  in_channels=4,
                  feat_channels=(64, ),
                  with_distance=False,
+                 use_feature_gate=False,
+                 feature_gate_reduction=4,
                  with_cluster_center=True,
                  with_voxel_center=True,
                  voxel_size=(0.2, 0.2, 4),
@@ -53,6 +81,7 @@ class PillarFeatureNet(nn.Module):
         self.fp16_enabled = False
         # Create PillarFeatureNet layers
         self.in_channels = in_channels
+        self.use_feature_gate = use_feature_gate
         feat_channels = [in_channels] + list(feat_channels)
         pfn_layers = []
         for i in range(len(feat_channels) - 1):
@@ -69,6 +98,10 @@ class PillarFeatureNet(nn.Module):
                     last_layer=last_layer,
                     mode=mode))
         self.pfn_layers = nn.ModuleList(pfn_layers)
+        self.feature_gate = (
+            PointFeatureChannelGate(self.in_channels, reduction=feature_gate_reduction)
+            if self.use_feature_gate else None
+        )
 
         # Need pillar (voxel) size and x/y offset in order to calculate offset
         self.vx = voxel_size[0]
@@ -132,6 +165,8 @@ class PillarFeatureNet(nn.Module):
         mask = get_paddings_indicator(num_points, voxel_count, axis=0)
         mask = torch.unsqueeze(mask, -1).type_as(features)
         features *= mask
+        if self.feature_gate is not None:
+            features = self.feature_gate(features, num_points)
 
         for pfn in self.pfn_layers:
             features = pfn(features, num_points)
