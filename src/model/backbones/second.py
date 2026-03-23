@@ -3,6 +3,61 @@ import warnings
 from torch import nn as nn
 from torch.nn import BatchNorm2d, Conv2d
 
+
+class ResidualBlock2D(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = Conv2d(
+            in_channels,
+            out_channels,
+            3,
+            stride=stride,
+            padding=1,
+            bias=False,
+        )
+        self.bn1 = BatchNorm2d(out_channels, eps=1e-3, momentum=0.01)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = Conv2d(
+            out_channels,
+            out_channels,
+            3,
+            padding=1,
+            bias=False,
+        )
+        self.bn2 = BatchNorm2d(out_channels, eps=1e-3, momentum=0.01)
+
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                Conv2d(
+                    in_channels,
+                    out_channels,
+                    1,
+                    stride=stride,
+                    bias=False,
+                ),
+                BatchNorm2d(out_channels, eps=1e-3, momentum=0.01),
+            )
+        else:
+            self.downsample = None
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out = out + identity
+        out = self.relu(out)
+        return out
+
+
 class SECOND(nn.Module):
     """Backbone network for SECOND/PointPillars/PartA2/MVXNet.
 
@@ -17,7 +72,8 @@ class SECOND(nn.Module):
                  in_channels=128,
                  out_channels=[128, 128, 256],
                  layer_nums=[3, 5, 5],
-                 layer_strides=[2, 2, 2]):
+                 layer_strides=[2, 2, 2],
+                 use_residual_blocks=False):
         super().__init__()
         assert len(layer_strides) == len(layer_nums)
         assert len(out_channels) == len(layer_nums)
@@ -27,25 +83,42 @@ class SECOND(nn.Module):
         # equal to pad-conv2d. we should use pad-conv2d.
         blocks = []
         for i, layer_num in enumerate(layer_nums):
-            block = [
-                Conv2d(in_filters[i],
-                       out_channels[i],
-                       3,
-                       stride=layer_strides[i],
-                       padding=1, 
-                       bias=False),
-                BatchNorm2d(out_channels[i], eps=1e-3, momentum=0.01),
-                nn.ReLU(inplace=True),
-            ]
-            for j in range(layer_num):
-                block.append(
-                    Conv2d(out_channels[i],
-                       out_channels[i],
-                       3,
-                       padding=1, 
-                       bias=False),)
-                block.append(BatchNorm2d(out_channels[i], eps=1e-3, momentum=0.01))
-                block.append(nn.ReLU(inplace=True))
+            if use_residual_blocks:
+                block = [
+                    ResidualBlock2D(
+                        in_filters[i],
+                        out_channels[i],
+                        stride=layer_strides[i],
+                    )
+                ]
+                for _ in range(layer_num):
+                    block.append(
+                        ResidualBlock2D(
+                            out_channels[i],
+                            out_channels[i],
+                            stride=1,
+                        )
+                    )
+            else:
+                block = [
+                    Conv2d(in_filters[i],
+                           out_channels[i],
+                           3,
+                           stride=layer_strides[i],
+                           padding=1,
+                           bias=False),
+                    BatchNorm2d(out_channels[i], eps=1e-3, momentum=0.01),
+                    nn.ReLU(inplace=True),
+                ]
+                for _ in range(layer_num):
+                    block.append(
+                        Conv2d(out_channels[i],
+                               out_channels[i],
+                               3,
+                               padding=1,
+                               bias=False),)
+                    block.append(BatchNorm2d(out_channels[i], eps=1e-3, momentum=0.01))
+                    block.append(nn.ReLU(inplace=True))
 
             block = nn.Sequential(*block)
             blocks.append(block)
@@ -64,6 +137,5 @@ class SECOND(nn.Module):
         outs = []
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
-            # print(x.shape)
             outs.append(x)
         return tuple(outs)
