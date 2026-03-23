@@ -18,10 +18,16 @@ module load 2024r1 miniconda3/4.12.0 cuda/12.5
 unset CONDA_SHLVL
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate amp
-export WANDB_MODE=offline
+# export WANDB_MODE=offline
 previous=$(nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/tail -n '+2')
 nvidia-smi
 
-srun python -u src/tools/train.py exp_id=centerpoint_baseline_db_try_slurm batch_size=4 num_workers=2 epochs=12
+default_args=(model=centerpoint_radar_pfn2 exp_id=radar_pfn2 batch_size=4 num_workers=2 epochs=30)
+train_args=("${default_args[@]}" "$@")
+
+printf 'Launching training with args:\n'
+printf '  %s\n' "${train_args[@]}"
+
+srun python -u src/tools/train.py "${train_args[@]}"
 
 nvidia-smi --query-accounted-apps='gpu_utilization,mem_utilization,max_memory_usage,time' --format='csv' | /usr/bin/grep -v -F "$previous"
