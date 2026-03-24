@@ -46,9 +46,14 @@ image_backbone:
   out_stage: layer4
   out_channels: 16
   trainable_stages: []
+  train_projection: FALSE
 
 point_image_fusion:
   enabled: TRUE
+  detach_before_voxelization: TRUE
+
+image_bev_fusion:
+  enabled: FALSE
 
 neck:
   in_channels: [64, 128, 256]

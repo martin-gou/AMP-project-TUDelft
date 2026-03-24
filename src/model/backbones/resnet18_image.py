@@ -13,10 +13,12 @@ class ResNet18ImageBackbone(nn.Module):
         out_stage="layer4",
         out_channels=16,
         trainable_stages=None,
+        train_projection=False,
     ):
         super().__init__()
         self.out_stage = out_stage
         self.trainable_stages = set(trainable_stages or [])
+        self.train_projection = train_projection
 
         self.backbone = resnet18(weights=None)
         if pretrained:
@@ -65,13 +67,16 @@ class ResNet18ImageBackbone(nn.Module):
             module.requires_grad_(requires_grad)
             if not requires_grad:
                 module.eval()
+        self.proj.requires_grad_(self.train_projection)
 
     def train(self, mode=True):
         super().train(mode)
         self._freeze_stages()
+        if not self.train_projection:
+            self.proj.eval()
         return self
 
-    def forward(self, x):
+    def _forward_backbone(self, x):
         x = self.stem(x)
         x = self.layer1(x)
         if self.out_stage == "layer1":
@@ -84,3 +89,9 @@ class ResNet18ImageBackbone(nn.Module):
             return self.proj(x)
         x = self.layer4(x)
         return self.proj(x)
+
+    def forward(self, x):
+        if not self.trainable_stages and not self.train_projection:
+            with torch.no_grad():
+                return self._forward_backbone(x)
+        return self._forward_backbone(x)

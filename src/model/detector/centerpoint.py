@@ -42,6 +42,7 @@ class CenterPoint(L.LightningModule):
         head_config = config.get('head', None)
         image_backbone_config = config.get('image_backbone', None)
         point_image_fusion_config = config.get('point_image_fusion', None)
+        image_bev_fusion_config = config.get('image_bev_fusion', None)
         
         self.voxel_layer = Voxelization(**voxel_layer_config)
         self.voxel_encoder = PillarFeatureNet(**voxel_encoder_config)
@@ -55,6 +56,18 @@ class CenterPoint(L.LightningModule):
         )
         self.point_image_fusion = point_image_fusion_config or {}
         self.enable_point_image_fusion = self.point_image_fusion.get("enabled", False)
+        self.image_bev_fusion = image_bev_fusion_config or {}
+        self.enable_image_bev_fusion = self.image_bev_fusion.get("enabled", False)
+        self.image_feature_dim = image_backbone_config.get('out_channels', 0) if image_backbone_config is not None else 0
+        self.image_bev_gate = None
+        if self.enable_image_bev_fusion:
+            gate_hidden_channels = self.image_bev_fusion.get('hidden_channels', max(self.image_feature_dim * 4, 64))
+            self.image_bev_gate = torch.nn.Sequential(
+                torch.nn.Linear(self.image_feature_dim, gate_hidden_channels),
+                torch.nn.ReLU(inplace=True),
+                torch.nn.Linear(gate_hidden_channels, head_config.get('in_channels', 384)),
+                torch.nn.Sigmoid(),
+            )
         
         self.optimizer_config = config.get('optimizer', None)
         
@@ -126,10 +139,22 @@ class CenterPoint(L.LightningModule):
             fused_points.append(torch.cat([sample_points, sampled_features], dim=1))
         return fused_points
 
+    def _apply_image_bev_fusion(self, neck_feats, image_features):
+        if (not self.enable_image_bev_fusion) or image_features is None or self.image_bev_gate is None:
+            return neck_feats
+        pooled = F.adaptive_avg_pool2d(image_features, output_size=1).flatten(1)
+        scale = 2.0 * self.image_bev_gate(pooled).unsqueeze(-1).unsqueeze(-1)
+        fused_feats = list(neck_feats)
+        fused_feats[0] = fused_feats[0] * scale
+        return fused_feats
+
     def _model_forward(self, pts_data, images=None, point_projections=None):
         image_features = self._extract_image_features(images)
         if self.enable_point_image_fusion and image_features is not None:
-            pts_data = self._fuse_point_image_features(pts_data, image_features, point_projections)
+            point_image_features = image_features
+            if self.point_image_fusion.get("detach_before_voxelization", False):
+                point_image_features = image_features.detach()
+            pts_data = self._fuse_point_image_features(pts_data, point_image_features, point_projections)
 
         voxel_dict = self.voxelize(pts_data)
     
@@ -142,6 +167,7 @@ class CenterPoint(L.LightningModule):
         bev_feats = self.middle_encoder(voxel_features, coors, bs)        
         backbone_feats = self.backbone(bev_feats)
         neck_feats = self.neck(backbone_feats)
+        neck_feats = self._apply_image_bev_fusion(neck_feats, image_features)
         ret_dict = self.head(neck_feats)
         return ret_dict
     
