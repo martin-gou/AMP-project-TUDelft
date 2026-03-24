@@ -182,6 +182,7 @@ class CenterPoint(L.LightningModule):
         assert len(batch['pts']) == 1, 'Batch size should be 1 for validation'
         pts_data = batch['pts']
         images = batch.get('images')
+        point_projections = batch.get('point_projections')
         metas = batch['metas']
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
