@@ -105,8 +105,9 @@ def train(cfg: DictConfig) -> None:
     print(f"Checkpoint directory: {checkpoint_dir}")
     print(f"Report file: {report_path}")
 
-    train_dataset = ViewOfDelft(data_root=cfg.data_root, split="train")
-    val_dataset = ViewOfDelft(data_root=cfg.data_root, split="val")
+    dataset_cfg = OmegaConf.to_container(cfg.model.get("dataset", {}), resolve=True) or {}
+    train_dataset = ViewOfDelft(data_root=cfg.data_root, split="train", **dataset_cfg)
+    val_dataset = ViewOfDelft(data_root=cfg.data_root, split="val", **dataset_cfg)
 
     train_dataloader = DataLoader(
         train_dataset,

@@ -1,9 +1,11 @@
 import os
-import numpy as np
-from src.model.utils import LiDARInstance3DBoxes
 
+import numpy as np
 import torch
 from torch.utils.data import Dataset
+
+from src.dataset.utils import prepare_image_tensor, project_lidar_points_to_image
+from src.model.utils import LiDARInstance3DBoxes
 
 from vod.configuration import KittiLocations
 from vod.frame import FrameDataLoader, FrameTransformMatrix, homogeneous_transformation
@@ -17,9 +19,7 @@ def transform_radar_points_to_lidar(radar_points, t_lidar_radar):
     lidar_points = radar_points.copy()
     radar_xyz_hom = np.ones((radar_points.shape[0], 4), dtype=np.float32)
     radar_xyz_hom[:, :3] = radar_points[:, :3]
-    lidar_points[:, :3] = homogeneous_transformation(radar_xyz_hom, t_lidar_radar)[
-        :, :3
-    ]
+    lidar_points[:, :3] = homogeneous_transformation(radar_xyz_hom, t_lidar_radar)[:, :3]
     return lidar_points
 
 
@@ -29,34 +29,26 @@ class ViewOfDelft(Dataset):
         "Pedestrian",
         "Cyclist",
     ]
-    #    'rider',
-    #    'unused_bicycle',
-    #    'bicycle_rack',
-    #    'human_depiction',
-    #    'moped_or_scooter',
-    #    'motor',
-    #    'truck',
-    #    'other_ride',
-    #    'other_vehicle',
-    #    'uncertain_ride'
 
     LABEL_MAPPING = {
-        "class": 0,  # Describes the type of object: 'Car', 'Pedestrian', 'Cyclist', etc.
-        "truncated": 1,  # Not used, only there to be compatible with KITTI format.
-        "occluded": 2,  # Integer (0,1,2) indicating occlusion state 0 = fully visible, 1 = partly occluded 2 = largely occluded.
-        "alpha": 3,  # Observation angle of object, ranging [-pi..pi]
+        "class": 0,
+        "truncated": 1,
+        "occluded": 2,
+        "alpha": 3,
         "bbox2d": slice(4, 8),
-        "bbox3d_dimensions": slice(
-            8, 11
-        ),  # 3D object dimensions: height, width, length (in meters).
-        "bbox3d_location": slice(
-            11, 14
-        ),  # 3D object location x,y,z in camera coordinates (in meters).
-        "bbox3d_rotation": 14,  # Rotation around -Z-axis in LiDAR coordinates [-pi..pi].
+        "bbox3d_dimensions": slice(8, 11),
+        "bbox3d_location": slice(11, 14),
+        "bbox3d_rotation": 14,
     }
 
     def __init__(
-        self, data_root="data/view_of_delft", sequential_loading=False, split="train"
+        self,
+        data_root="data/view_of_delft",
+        sequential_loading=False,
+        split="train",
+        load_image=False,
+        return_point_projection=False,
+        image_target_shape=None,
     ):
         super().__init__()
 
@@ -65,6 +57,9 @@ class ViewOfDelft(Dataset):
             f"Invalid split: {split}. Must be one of ['train', 'val', 'test']"
         )
         self.split = split
+        self.load_image = load_image
+        self.return_point_projection = return_point_projection
+        self.image_target_shape = image_target_shape
         split_file = os.path.join(data_root, "lidar", "ImageSets", f"{split}.txt")
 
         with open(split_file, "r") as f:
@@ -88,11 +83,28 @@ class ViewOfDelft(Dataset):
             local_transforms.t_lidar_radar,
         )
 
+        image_tensor = None
+        point_projection = None
+        if self.load_image or self.return_point_projection:
+            image = vod_frame_data.image
+            if image is None:
+                raise FileNotFoundError(f"Image not found for frame {num_frame}")
+            if self.load_image:
+                image_tensor = prepare_image_tensor(image, self.image_target_shape)
+            if self.return_point_projection:
+                point_projection = project_lidar_points_to_image(
+                    radar_data,
+                    local_transforms.t_camera_lidar,
+                    local_transforms.camera_projection_matrix,
+                    image.shape[:2],
+                    self.image_target_shape,
+                )
+
         gt_labels_3d_list = []
         gt_bboxes_3d_list = []
         if self.split != "test":
             raw_labels = vod_frame_data.raw_labels
-            for idx, label in enumerate(raw_labels):
+            for label in raw_labels:
                 label = label.split(" ")
 
                 if label[self.LABEL_MAPPING["class"]] in self.CLASSES:
@@ -112,7 +124,7 @@ class ViewOfDelft(Dataset):
                     bbox3d_locs = np.array(bbox3d_loc_lidar[0, :3], dtype=np.float32)
                     bbox3d_dims = np.array(
                         label[self.LABEL_MAPPING["bbox3d_dimensions"]], dtype=np.float32
-                    )[[2, 1, 0]]  # hwl -> lwh
+                    )[[2, 1, 0]]
                     bbox3d_rot = np.array(
                         [label[self.LABEL_MAPPING["bbox3d_rotation"]]], dtype=np.float32
                     )
@@ -121,7 +133,7 @@ class ViewOfDelft(Dataset):
                         np.concatenate([bbox3d_locs, bbox3d_dims, bbox3d_rot], axis=0)
                     )
 
-        radar_data = torch.tensor(radar_data)
+        radar_data = torch.tensor(radar_data, dtype=torch.float32)
 
         if gt_bboxes_3d_list == []:
             gt_labels_3d = np.array([0])
@@ -140,5 +152,10 @@ class ViewOfDelft(Dataset):
             lidar_data=radar_data,
             gt_labels_3d=gt_labels_3d,
             gt_bboxes_3d=gt_bboxes_3d,
-            meta=dict(num_frame=num_frame),
+            image=image_tensor,
+            point_projection=point_projection,
+            meta=dict(
+                num_frame=num_frame,
+                image_shape=list(image_tensor.shape[-2:]) if image_tensor is not None else None,
+            ),
         )

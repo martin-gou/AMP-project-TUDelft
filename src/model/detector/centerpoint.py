@@ -19,7 +19,7 @@ import torch.distributed as dist
 from src.ops import Voxelization
 from src.model.voxel_encoders import PillarFeatureNet
 from src.model.middle_encoders import PointPillarsScatter
-from src.model.backbones import SECOND
+from src.model.backbones import ResNet18ImageBackbone, SECOND
 from src.model.necks import SECONDFPN
 from src.model.heads import CenterHead
 
@@ -40,6 +40,7 @@ class CenterPoint(L.LightningModule):
         backbone_config = config.get('backbone', None)
         neck_config = config.get('neck', None)
         head_config = config.get('head', None)
+        image_backbone_config = config.get('image_backbone', None)
         
         self.voxel_layer = Voxelization(**voxel_layer_config)
         self.voxel_encoder = PillarFeatureNet(**voxel_encoder_config)
@@ -47,6 +48,10 @@ class CenterPoint(L.LightningModule):
         self.backbone = SECOND(**backbone_config)
         self.neck = SECONDFPN(**neck_config)
         self.head = CenterHead(**head_config)
+        self.image_backbone = (
+            ResNet18ImageBackbone(**image_backbone_config)
+            if image_backbone_config is not None else None
+        )
         
         self.optimizer_config = config.get('optimizer', None)
         
@@ -79,7 +84,14 @@ class CenterPoint(L.LightningModule):
 
         return voxel_dict
     
-    def _model_forward(self, pts_data):
+    def _extract_image_features(self, images):
+        if self.image_backbone is None or not images or images[0] is None:
+            return None
+        image_batch = torch.stack(images, dim=0).to(self.device, non_blocking=True)
+        return self.image_backbone(image_batch)
+
+    def _model_forward(self, pts_data, images=None):
+        _ = self._extract_image_features(images)
 
         voxel_dict = self.voxelize(pts_data)
     
@@ -97,10 +109,11 @@ class CenterPoint(L.LightningModule):
     
     def training_step(self, batch, batch_idx):
         pts_data = batch['pts']
+        images = batch.get('images')
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data)
+        ret_dict = self._model_forward(pts_data, images=images)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         losses = self.head.loss(*loss_input)
@@ -129,11 +142,12 @@ class CenterPoint(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         assert len(batch['pts']) == 1, 'Batch size should be 1 for validation'
         pts_data = batch['pts']
+        images = batch.get('images')
         metas = batch['metas']
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data)
+        ret_dict = self._model_forward(pts_data, images=images)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         bbox_list = self.head.get_bboxes(ret_dict, img_metas=metas)

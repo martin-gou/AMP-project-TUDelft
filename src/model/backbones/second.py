@@ -4,8 +4,28 @@ from torch import nn as nn
 from torch.nn import BatchNorm2d, Conv2d
 
 
+class SEBlock2D(nn.Module):
+    def __init__(self, channels, reduction=8):
+        super().__init__()
+        reduction = max(1, min(reduction, channels))
+        reduced_channels = max(1, channels // reduction)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = Conv2d(channels, reduced_channels, 1, bias=True)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = Conv2d(reduced_channels, channels, 1, bias=True)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        scale = self.pool(x)
+        scale = self.fc1(scale)
+        scale = self.relu(scale)
+        scale = self.fc2(scale)
+        scale = self.sigmoid(scale)
+        return x * scale
+
+
 class ResidualBlock2D(nn.Module):
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels, out_channels, stride=1, use_se=False, se_reduction=8):
         super().__init__()
         self.conv1 = Conv2d(
             in_channels,
@@ -25,6 +45,7 @@ class ResidualBlock2D(nn.Module):
             bias=False,
         )
         self.bn2 = BatchNorm2d(out_channels, eps=1e-3, momentum=0.01)
+        self.se = SEBlock2D(out_channels, reduction=se_reduction) if use_se else None
 
         if stride != 1 or in_channels != out_channels:
             self.downsample = nn.Sequential(
@@ -50,6 +71,9 @@ class ResidualBlock2D(nn.Module):
         out = self.conv2(out)
         out = self.bn2(out)
 
+        if self.se is not None:
+            out = self.se(out)
+
         if self.downsample is not None:
             identity = self.downsample(x)
 
@@ -73,14 +97,14 @@ class SECOND(nn.Module):
                  out_channels=[128, 128, 256],
                  layer_nums=[3, 5, 5],
                  layer_strides=[2, 2, 2],
-                 use_residual_blocks=False):
+                 use_residual_blocks=False,
+                 use_se=False,
+                 se_reduction=8):
         super().__init__()
         assert len(layer_strides) == len(layer_nums)
         assert len(out_channels) == len(layer_nums)
 
         in_filters = [in_channels, *out_channels[:-1]]
-        # note that when stride > 1, conv2d with same padding isn't
-        # equal to pad-conv2d. we should use pad-conv2d.
         blocks = []
         for i, layer_num in enumerate(layer_nums):
             if use_residual_blocks:
@@ -89,6 +113,8 @@ class SECOND(nn.Module):
                         in_filters[i],
                         out_channels[i],
                         stride=layer_strides[i],
+                        use_se=use_se,
+                        se_reduction=se_reduction,
                     )
                 ]
                 for _ in range(layer_num):
@@ -97,9 +123,16 @@ class SECOND(nn.Module):
                             out_channels[i],
                             out_channels[i],
                             stride=1,
+                            use_se=use_se,
+                            se_reduction=se_reduction,
                         )
                     )
             else:
+                if use_se:
+                    warnings.warn(
+                        'use_se=True is ignored when use_residual_blocks=False.',
+                        stacklevel=2,
+                    )
                 block = [
                     Conv2d(in_filters[i],
                            out_channels[i],
