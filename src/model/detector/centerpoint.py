@@ -41,6 +41,7 @@ class CenterPoint(L.LightningModule):
         neck_config = config.get('neck', None)
         head_config = config.get('head', None)
         image_backbone_config = config.get('image_backbone', None)
+        point_image_fusion_config = config.get('point_image_fusion', None)
         
         self.voxel_layer = Voxelization(**voxel_layer_config)
         self.voxel_encoder = PillarFeatureNet(**voxel_encoder_config)
@@ -52,6 +53,8 @@ class CenterPoint(L.LightningModule):
             ResNet18ImageBackbone(**image_backbone_config)
             if image_backbone_config is not None else None
         )
+        self.point_image_fusion = point_image_fusion_config or {}
+        self.enable_point_image_fusion = self.point_image_fusion.get("enabled", False)
         
         self.optimizer_config = config.get('optimizer', None)
         
@@ -90,8 +93,43 @@ class CenterPoint(L.LightningModule):
         image_batch = torch.stack(images, dim=0).to(self.device, non_blocking=True)
         return self.image_backbone(image_batch)
 
-    def _model_forward(self, pts_data, images=None):
-        _ = self._extract_image_features(images)
+    def _fuse_point_image_features(self, pts_data, image_features, point_projections):
+        fused_points = []
+        feature_channels = image_features.shape[1]
+        for sample_idx, points in enumerate(pts_data):
+            sample_points = points.to(self.device)
+            point_projection = point_projections[sample_idx]
+            if point_projection is None or sample_points.shape[0] == 0:
+                zeros = sample_points.new_zeros((sample_points.shape[0], feature_channels))
+                fused_points.append(torch.cat([sample_points, zeros], dim=1))
+                continue
+
+            coords = point_projection["coords"].to(self.device)
+            mask = point_projection["mask"].to(self.device)
+            image_shape = point_projection["image_shape"].to(self.device)
+            sampled_features = sample_points.new_zeros((sample_points.shape[0], feature_channels))
+            if mask.any():
+                valid_coords = coords[mask]
+                grid = valid_coords.clone()
+                grid[:, 0] = grid[:, 0] / max(float(image_shape[1].item() - 1), 1.0) * 2.0 - 1.0
+                grid[:, 1] = grid[:, 1] / max(float(image_shape[0].item() - 1), 1.0) * 2.0 - 1.0
+                grid = grid.view(1, 1, -1, 2)
+                sampled = F.grid_sample(
+                    image_features[sample_idx:sample_idx + 1],
+                    grid,
+                    mode="bilinear",
+                    padding_mode="zeros",
+                    align_corners=True,
+                )
+                sampled = sampled.squeeze(0).squeeze(1).transpose(0, 1).contiguous()
+                sampled_features[mask] = sampled
+            fused_points.append(torch.cat([sample_points, sampled_features], dim=1))
+        return fused_points
+
+    def _model_forward(self, pts_data, images=None, point_projections=None):
+        image_features = self._extract_image_features(images)
+        if self.enable_point_image_fusion and image_features is not None:
+            pts_data = self._fuse_point_image_features(pts_data, image_features, point_projections)
 
         voxel_dict = self.voxelize(pts_data)
     
@@ -110,10 +148,11 @@ class CenterPoint(L.LightningModule):
     def training_step(self, batch, batch_idx):
         pts_data = batch['pts']
         images = batch.get('images')
+        point_projections = batch.get('point_projections')
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data, images=images)
+        ret_dict = self._model_forward(pts_data, images=images, point_projections=point_projections)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         losses = self.head.loss(*loss_input)
@@ -147,7 +186,7 @@ class CenterPoint(L.LightningModule):
         gt_label_3d = batch['gt_labels_3d']
         gt_bboxes_3d = batch['gt_bboxes_3d']
         
-        ret_dict = self._model_forward(pts_data, images=images)
+        ret_dict = self._model_forward(pts_data, images=images, point_projections=point_projections)
         loss_input = [gt_bboxes_3d, gt_label_3d, ret_dict]
         
         bbox_list = self.head.get_bboxes(ret_dict, img_metas=metas)
