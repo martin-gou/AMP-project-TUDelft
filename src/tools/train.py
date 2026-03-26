@@ -44,6 +44,9 @@ def _format_report_path(path):
     return f"`{path}`"
 
 
+REPORT_ANALYSIS_MARKER = "<!-- REPORT_ANALYSIS_START -->\n"
+
+
 def append_training_report(
     cfg,
     report_path,
@@ -85,8 +88,19 @@ def append_training_report(
         f" | {_format_report_path(run_output_dir)} |\n"
     )
 
-    with open(report_path, "a", encoding="utf-8") as report_file:
-        report_file.write(row)
+    with open(report_path, "r", encoding="utf-8") as report_file:
+        report_text = report_file.read()
+
+    marker_index = report_text.find(REPORT_ANALYSIS_MARKER)
+    if marker_index == -1:
+        report_text += row
+    else:
+        prefix = report_text[:marker_index].rstrip("\n")
+        suffix = report_text[marker_index:]
+        report_text = prefix + "\n" + row + "\n" + suffix
+
+    with open(report_path, "w", encoding="utf-8") as report_file:
+        report_file.write(report_text)
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="train")
@@ -105,7 +119,13 @@ def train(cfg: DictConfig) -> None:
     print(f"Checkpoint directory: {checkpoint_dir}")
     print(f"Report file: {report_path}")
 
-    dataset_cfg = OmegaConf.to_container(cfg.model.get("dataset", {}), resolve=True) or {}
+    dataset_cfg_node = cfg.model.get("dataset")
+    if dataset_cfg_node is None:
+        dataset_cfg = {}
+    elif OmegaConf.is_config(dataset_cfg_node):
+        dataset_cfg = OmegaConf.to_container(dataset_cfg_node, resolve=True) or {}
+    else:
+        dataset_cfg = dict(dataset_cfg_node)
     train_dataset = ViewOfDelft(data_root=cfg.data_root, split="train", **dataset_cfg)
     val_dataset = ViewOfDelft(data_root=cfg.data_root, split="val", **dataset_cfg)
 

@@ -329,6 +329,90 @@ Keep if:
 - gain is worth the extra cost
 
 
+## Update After The Previous Runs
+
+结束了前面的测试，决定在 `radar_pfn2_gate` 的基础上继续做实验。
+
+Reason:
+- `radar_pfn2_gate` is still the strongest clean radar-first line by ROI mAP.
+- `E4` and `E5` did not beat it clearly enough to justify a heavier BEV backbone.
+- `E8` and `E9` showed that the current camera fusion path is not helping.
+- The next experiments should therefore stay radar-only and focus on the pillar front-end, where the gain actually appeared.
+
+
+### Phase 3: `radar_pfn2_gate` follow-up
+
+Base model:
+- `centerpoint_radar_pfn2_gate`
+
+
+#### E3_1 - Add distance feature on top of `radar_pfn2_gate`
+
+Hypothesis:
+- explicit point distance may complement the current gate because radar reliability changes strongly with range
+
+Change:
+- keep the current two-layer PFN and channel gate
+- enable `with_distance`
+
+Files:
+- `src/config/model/centerpoint_radar_pfn2_gate_e3_1.yaml`
+- `src/tools/slurm_train_e3_1.sh`
+
+Important:
+- do not combine this with a new gate type
+- compare directly against `radar_pfn2_gate`
+
+Keep if:
+- ROI mAP improves over `radar_pfn2_gate`
+
+
+#### E3_2 - Replace channel gate with point-wise reliability gate
+
+Hypothesis:
+- a point-wise gate may work better than a channel gate because radar noise is often point-specific inside a pillar
+
+Change:
+- replace the current channel gate with a point-wise reliability gate before PFN aggregation
+- keep voxelization and backbone unchanged
+
+Files:
+- `src/model/voxel_encoders/pillar_encoder.py`
+- `src/config/model/centerpoint_radar_pfn2_gate_e3_2.yaml`
+- `src/tools/slurm_train_e3_2.sh`
+
+Important:
+- keep `with_distance` off in this experiment
+- compare directly against `radar_pfn2_gate`
+
+Keep if:
+- ROI mAP improves over `radar_pfn2_gate`
+- class-wise ROI AP becomes more stable for `Pedestrian` and `Cyclist`
+
+
+#### E3_3 - Finer voxelization for the gated PFN baseline
+
+Hypothesis:
+- the current 0.32 m grid may be too coarse for the ROI metric, especially for small objects
+
+Change:
+- keep the current gated PFN design
+- use a finer BEV voxel size
+- slightly increase pillar capacity to avoid dropping too many points/voxels
+
+Files:
+- `src/config/model/centerpoint_radar_pfn2_gate_e3_3.yaml`
+- `src/tools/slurm_train_e3_3.sh`
+
+Important:
+- update scatter output shape, grid size, and bbox coder voxel size consistently
+- do not change the BEV backbone in the same run
+
+Keep if:
+- ROI mAP improves over `radar_pfn2_gate`
+- runtime remains acceptable for the current Slurm budget
+
+
 ## What I Recommend First
 
 If time is limited, do this exact order:
@@ -342,6 +426,12 @@ If time is limited, do this exact order:
 7. E7 frozen ResNet-18 encoder
 8. E8 point-level camera fusion
 9. E9 partial fine-tune
+
+After finishing the original sequence above, continue with this follow-up order:
+
+1. E3_1 distance feature on `radar_pfn2_gate`
+2. E3_2 point-wise reliability gate
+3. E3_3 finer voxelization on the gated PFN baseline
 
 
 ## What I Do Not Recommend As A First Attempt
