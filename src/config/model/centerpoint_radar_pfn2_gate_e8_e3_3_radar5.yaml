@@ -1,0 +1,122 @@
+name: centerpoint_radar_pfn2_gate_e8_e3_3_radar5
+exp_id: ${exp_id}
+
+data_root: ${data_root}
+class_names: ["Car", "Pedestrian", "Cyclist"]
+point_cloud_range: [0, -25.6, -3, 51.2, 25.6, 2]
+voxel_size: [0.256, 0.256, 5]
+output_dir: ${output_dir}
+
+dataset:
+  load_image: TRUE
+  return_point_projection: TRUE
+  image_target_shape: [384, 640]
+  radar_sweeps: 5
+
+pts_voxel_layer:
+  max_num_points: 8
+  voxel_size: ${model.voxel_size}
+  point_cloud_range: ${model.point_cloud_range}
+  max_voxels: [12000, 30000]
+
+voxel_encoder:
+  in_channels: 23
+  feat_channels: [64, 64]
+  with_distance: FALSE
+  use_feature_gate: TRUE
+  feature_gate_reduction: 4
+  voxel_size: ${model.voxel_size}
+  point_cloud_range: ${model.point_cloud_range}
+
+middle_encoder:
+  in_channels: 64
+  output_shape: [200, 200]
+
+backbone:
+  in_channels: 64
+  layer_nums: [3, 5, 5]
+  layer_strides: [2, 2, 2]
+  out_channels: [64, 128, 256]
+  use_residual_blocks: TRUE
+  use_se: TRUE
+  se_reduction: 8
+
+image_backbone:
+  pretrained: TRUE
+  pretrained_path: /home/ggou/.cache/torch/hub/checkpoints/resnet18-f37072fd.pth
+  out_stage: layer4
+  out_channels: 16
+  trainable_stages: []
+  train_projection: FALSE
+
+point_image_fusion:
+  enabled: TRUE
+  detach_before_voxelization: TRUE
+
+image_bev_fusion:
+  enabled: FALSE
+
+neck:
+  in_channels: [64, 128, 256]
+  upsample_strides: [1, 2, 4]
+  out_channels: [128, 128, 128]
+
+head:
+  in_channels: 384
+  tasks: [
+    {num_class: 1, class_names: ["Car"]},
+    {num_class: 1, class_names: ["Pedestrian"]},
+    {num_class: 1, class_names: ["Cyclist"]}
+    ]
+  common_heads:
+    reg: [2, 2]
+    height: [1, 2]
+    dim: [3, 2]
+    rot: [2, 2]
+    heatmap: ~
+  share_conv_channel: 64
+  bbox_coder:
+    pc_range: ${model.point_cloud_range}
+    post_center_range: [-5, -30.6, -6, 56.2, 30.6, 5]
+    max_num: 350
+    score_threshold: 0.1
+    out_size_factor: 2
+    voxel_size: [0.256, 0.256]
+    code_size: 7
+  separate_head:
+    in_channels: ~
+    heads: ~
+    init_bias: -2.19
+    final_kernel: 3
+  loss_cls:
+    reduction: "mean"
+    loss_weight: 1.0
+  loss_bbox:
+    reduction: "mean"
+    loss_weight: 0.25
+  norm_bbox: TRUE
+  train_cfg:
+    grid_size: [200, 200, 1]
+    point_cloud_range: ${model.point_cloud_range}
+    voxel_size: ${model.voxel_size}
+    out_size_factor: 2
+    dense_reg: 1
+    gaussian_overlap: 0.1
+    max_objs: 500
+    min_radius: 2
+    code_weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+  test_cfg:
+    post_center_limit_range: [-5, -30.6, -6, 56.2, 30.6, 5]
+    max_per_img: 500
+    max_pool_nms: False
+    min_radius: [4, 0.3, 0.85]
+    score_threshold: 0.1
+    out_size_factor: 2
+    nms_type: "circle"
+    pre_max_size: 1000
+    post_max_size: 83
+    nms_thr: 0.2
+
+optimizer:
+  lr: 0.001
+  weight_decay: 0.01
