@@ -22,7 +22,7 @@ conda activate amp
 previous=$(nvidia-smi --query-accounted-apps="gpu_utilization,mem_utilization,max_memory_usage,time" --format=csv | /usr/bin/tail -n +2)
 nvidia-smi
 
-default_args=(model=centerpoint_radar_pfn2_gate_e8_e3_3_radar3 exp_id=radar_pfn2_gate_e8_e3_3_radar3 batch_size=2 num_workers=2 epochs=30)
+default_args=(model=centerpoint_radar_pfn2_gate_e8_e3_3_radar3 exp_id=radar_pfn2_gate_e8_e3_3_radar3 batch_size=2 num_workers=2 epochs=20)
 train_args=("${default_args[@]}" "$@")
 
 echo "Launching training with args:"

@@ -80,6 +80,14 @@ class ViewOfDelft(Dataset):
             self.sample_list = [line.strip() for line in lines]
 
         self.vod_kitti_locations = KittiLocations(root_dir=data_root)
+        if self.radar_sweeps == 3:
+            self.vod_kitti_locations.radar_dir = os.path.join(
+                data_root, "radar_3frames", "training", "velodyne"
+            )
+        elif self.radar_sweeps == 5:
+            self.vod_kitti_locations.radar_dir = os.path.join(
+                data_root, "radar_5frames", "training", "velodyne"
+            )
 
     def __len__(self):
         return len(self.sample_list)
@@ -93,43 +101,13 @@ class ViewOfDelft(Dataset):
         frame_transforms = FrameTransformMatrix(frame_data)
         return num_frame, frame_data, frame_transforms
 
-    def _load_temporal_radar_points(self, idx, current_transforms):
-        stacked_points = []
-        for sweep_offset in range(self.radar_sweeps):
-            source_idx = idx - sweep_offset
-            if source_idx < 0:
-                break
-
-            _, source_frame_data, source_transforms = self._load_frame_bundle(source_idx)
-            source_radar = np.asarray(source_frame_data.radar_data, dtype=np.float32)
-            if source_radar.size == 0:
-                continue
-
-            if sweep_offset == 0:
-                transformed = transform_radar_points_to_lidar(
-                    source_radar,
-                    current_transforms.t_lidar_radar,
-                )
-            else:
-                source_to_current_lidar = (
-                    current_transforms.t_lidar_camera
-                    .dot(current_transforms.t_camera_odom)
-                    .dot(source_transforms.t_odom_camera)
-                    .dot(source_transforms.t_camera_radar)
-                )
-                transformed = transform_points_xyz(source_radar, source_to_current_lidar)
-
-            transformed[:, 6] = float(sweep_offset)
-            stacked_points.append(transformed)
-
-        if not stacked_points:
-            return np.zeros((0, 7), dtype=np.float32)
-        return np.concatenate(stacked_points, axis=0).astype(np.float32, copy=False)
-
     def __getitem__(self, idx):
         num_frame, vod_frame_data, local_transforms = self._load_frame_bundle(idx)
 
-        radar_data = self._load_temporal_radar_points(idx, local_transforms)
+        radar_data = transform_radar_points_to_lidar(
+            vod_frame_data.radar_data,
+            local_transforms.t_lidar_radar,
+        )
 
         image_tensor = None
         point_projection = None
