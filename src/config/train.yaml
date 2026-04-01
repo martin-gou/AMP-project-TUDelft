@@ -22,7 +22,6 @@ epochs: 80
 
 # log settings
 log_every: 50
-val_every: 3
+val_every: 2
 save_top_model: 5
-
 

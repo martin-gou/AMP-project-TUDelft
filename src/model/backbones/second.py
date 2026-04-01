@@ -99,7 +99,8 @@ class SECOND(nn.Module):
                  layer_strides=[2, 2, 2],
                  use_residual_blocks=False,
                  use_se=False,
-                 se_reduction=8):
+                 se_reduction=8,
+                 dropout_prob=0.0):
         super().__init__()
         assert len(layer_strides) == len(layer_nums)
         assert len(out_channels) == len(layer_nums)
@@ -157,6 +158,10 @@ class SECOND(nn.Module):
             blocks.append(block)
 
         self.blocks = nn.ModuleList(blocks)
+        self.stage_dropouts = nn.ModuleList([
+            nn.Dropout2d(dropout_prob) if dropout_prob > 0 else nn.Identity()
+            for _ in blocks
+        ])
 
     def forward(self, x):
         """Forward function.
@@ -170,5 +175,6 @@ class SECOND(nn.Module):
         outs = []
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
+            x = self.stage_dropouts[i](x)
             outs.append(x)
         return tuple(outs)

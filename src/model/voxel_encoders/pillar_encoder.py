@@ -42,6 +42,46 @@ class PointFeatureReliabilityGate(nn.Module):
         return features * weights
 
 
+class PointFeatureSelfAttention(nn.Module):
+    """Lightweight self-attention over decorated point features."""
+
+    def __init__(self, channels, num_heads=4, dropout_prob=0.0, mlp_ratio=2.0):
+        super().__init__()
+        if channels % num_heads != 0:
+            raise ValueError(
+                f"PointFeatureSelfAttention requires channels ({channels}) "
+                f"to be divisible by num_heads ({num_heads}).")
+        hidden_channels = max(int(channels * mlp_ratio), channels)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=channels,
+            num_heads=num_heads,
+            dropout=dropout_prob,
+            batch_first=True,
+        )
+        self.norm1 = nn.LayerNorm(channels)
+        self.norm2 = nn.LayerNorm(channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, hidden_channels, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_prob),
+            nn.Linear(hidden_channels, channels, bias=True),
+            nn.Dropout(dropout_prob),
+        )
+
+    def forward(self, features, mask):
+        key_padding_mask = ~mask.squeeze(-1).bool()
+        attn_out, _ = self.attn(
+            features,
+            features,
+            features,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        features = self.norm1(features + attn_out)
+        features = self.norm2(features + self.mlp(features))
+        return features * mask
+
+
 class PillarFeatureNet(nn.Module):
     """Pillar Feature Net.
 
@@ -82,6 +122,11 @@ class PillarFeatureNet(nn.Module):
                  use_feature_gate=False,
                  feature_gate_type='channel',
                  feature_gate_reduction=4,
+                 use_feature_attention=False,
+                 attention_num_heads=4,
+                 attention_dropout_prob=0.0,
+                 attention_mlp_ratio=2.0,
+                 pfn_dropout_prob=0.0,
                  with_cluster_center=True,
                  with_voxel_center=True,
                  voxel_size=(0.2, 0.2, 4),
@@ -106,6 +151,7 @@ class PillarFeatureNet(nn.Module):
         self.use_feature_gate = use_feature_gate
         assert feature_gate_type in ['channel', 'point']
         self.feature_gate_type = feature_gate_type
+        self.use_feature_attention = use_feature_attention
         feat_channels = [in_channels] + list(feat_channels)
         pfn_layers = []
         for i in range(len(feat_channels) - 1):
@@ -120,7 +166,8 @@ class PillarFeatureNet(nn.Module):
                     in_filters,
                     out_filters,
                     last_layer=last_layer,
-                    mode=mode))
+                    mode=mode,
+                    dropout_prob=pfn_dropout_prob))
         self.pfn_layers = nn.ModuleList(pfn_layers)
         if self.use_feature_gate:
             if self.feature_gate_type == 'channel':
@@ -135,6 +182,15 @@ class PillarFeatureNet(nn.Module):
                 )
         else:
             self.feature_gate = None
+        if self.use_feature_attention:
+            self.feature_attention = PointFeatureSelfAttention(
+                self.in_channels,
+                num_heads=attention_num_heads,
+                dropout_prob=attention_dropout_prob,
+                mlp_ratio=attention_mlp_ratio,
+            )
+        else:
+            self.feature_attention = None
 
         # Need pillar (voxel) size and x/y offset in order to calculate offset
         self.vx = voxel_size[0]
@@ -200,6 +256,8 @@ class PillarFeatureNet(nn.Module):
         features *= mask
         if self.feature_gate is not None:
             features = self.feature_gate(features, mask)
+        if self.feature_attention is not None:
+            features = self.feature_attention(features, mask)
 
         for pfn in self.pfn_layers:
             features = pfn(features, num_points)
