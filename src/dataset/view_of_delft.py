@@ -23,6 +23,17 @@ def transform_radar_points_to_lidar(radar_points, t_lidar_radar):
     return lidar_points
 
 
+def transform_points_xyz(points, transform):
+    points = np.asarray(points, dtype=np.float32)
+    if points.size == 0:
+        return points
+    point_hom = np.ones((points.shape[0], 4), dtype=np.float32)
+    point_hom[:, :3] = points[:, :3]
+    transformed = points.copy()
+    transformed[:, :3] = homogeneous_transformation(point_hom, transform)[:, :3]
+    return transformed
+
+
 class ViewOfDelft(Dataset):
     CLASSES = [
         "Car",
@@ -45,6 +56,7 @@ class ViewOfDelft(Dataset):
         self,
         data_root="data/view_of_delft",
         sequential_loading=False,
+        radar_sweeps=1,
         split="train",
         load_image=False,
         return_point_projection=False,
@@ -57,6 +69,7 @@ class ViewOfDelft(Dataset):
             f"Invalid split: {split}. Must be one of ['train', 'val', 'test']"
         )
         self.split = split
+        self.radar_sweeps = max(int(radar_sweeps), 1)
         self.load_image = load_image
         self.return_point_projection = return_point_projection
         self.image_target_shape = image_target_shape
@@ -67,16 +80,29 @@ class ViewOfDelft(Dataset):
             self.sample_list = [line.strip() for line in lines]
 
         self.vod_kitti_locations = KittiLocations(root_dir=data_root)
+        if self.radar_sweeps == 3:
+            self.vod_kitti_locations.radar_dir = os.path.join(
+                data_root, "radar_3frames", "training", "velodyne"
+            )
+        elif self.radar_sweeps == 5:
+            self.vod_kitti_locations.radar_dir = os.path.join(
+                data_root, "radar_5frames", "training", "velodyne"
+            )
 
     def __len__(self):
         return len(self.sample_list)
 
-    def __getitem__(self, idx):
+    def _load_frame_bundle(self, idx):
         num_frame = self.sample_list[idx]
-        vod_frame_data = FrameDataLoader(
-            kitti_locations=self.vod_kitti_locations, frame_number=num_frame
+        frame_data = FrameDataLoader(
+            kitti_locations=self.vod_kitti_locations,
+            frame_number=num_frame,
         )
-        local_transforms = FrameTransformMatrix(vod_frame_data)
+        frame_transforms = FrameTransformMatrix(frame_data)
+        return num_frame, frame_data, frame_transforms
+
+    def __getitem__(self, idx):
+        num_frame, vod_frame_data, local_transforms = self._load_frame_bundle(idx)
 
         radar_data = transform_radar_points_to_lidar(
             vod_frame_data.radar_data,

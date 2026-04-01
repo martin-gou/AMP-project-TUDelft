@@ -146,6 +146,7 @@ class CenterHead(nn.Module):
                  num_heatmap_convs: int = 2,
                  bias: str = 'auto',
                  norm_bbox: bool = True,
+                 shared_conv_dropout_prob: float = 0.0,
                  train_cfg: Optional[dict] = None,
                  test_cfg: Optional[dict] = None):
         super().__init__()
@@ -172,6 +173,10 @@ class CenterHead(nn.Module):
             padding=1,
             with_norm=True,
             bias=bias)
+        self.shared_conv_dropout = (
+            nn.Dropout2d(shared_conv_dropout_prob)
+            if shared_conv_dropout_prob > 0 else nn.Identity()
+        )
 
         self.task_heads = nn.ModuleList()
         for num_cls in num_classes:
@@ -195,6 +200,7 @@ class CenterHead(nn.Module):
             x = x.to(torch.float32)
         
         x = self.shared_conv(x)
+        x = self.shared_conv_dropout(x)
 
         for task in self.task_heads:
             ret_dicts.append(task(x))

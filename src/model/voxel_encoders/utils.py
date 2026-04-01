@@ -117,7 +117,8 @@ class PFNLayer(nn.Module):
                  in_channels,
                  out_channels,
                  last_layer=False,
-                 mode='max'):
+                 mode='max',
+                 dropout_prob=0.0):
 
         super().__init__()
         self.fp16_enabled = False
@@ -132,6 +133,7 @@ class PFNLayer(nn.Module):
 
         assert mode in ['max', 'avg']
         self.mode = mode
+        self.dropout = nn.Dropout(dropout_prob) if dropout_prob > 0 else None
 
     def forward(self, inputs, num_voxels=None, aligned_distance=None):
         """Forward function.
@@ -152,6 +154,8 @@ class PFNLayer(nn.Module):
         x = self.norm(x.permute(0, 2, 1).contiguous()).permute(0, 2,
                                                                1).contiguous()
         x = F.relu(x)
+        if self.dropout is not None:
+            x = self.dropout(x)
 
         if self.mode == 'max':
             if aligned_distance is not None:

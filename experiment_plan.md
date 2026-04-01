@@ -413,6 +413,120 @@ Keep if:
 - runtime remains acceptable for the current Slurm budget
 
 
+
+
+## Update After E3_3 And The E8 Generalization Gap
+
+Observations:
+- `E3_3` improved validation ROI mAP by using a finer voxel grid.
+- A separate test attempt showed a noticeable drop from roughly `61` ROI mAP to roughly `57` ROI mAP.
+- This suggests that finer voxelization is useful, but it may also increase overfitting or validation-specific tuning effects.
+- The next step is therefore to port the best voxelization idea into the camera-fusion line and then test more aggressive variants in a controlled order.
+
+
+### Phase 4: `E8` Follow-up With Better Radar Geometry
+
+Base model:
+- `centerpoint_radar_pfn2_gate_e8`
+
+
+#### E8_E3_3 - Port the `E3_3` voxelization changes into `E8`
+
+Hypothesis:
+- camera fusion may benefit from the same finer radar discretization that already helped the radar-only line
+
+Change:
+- keep the existing `E8` camera branch and frozen image fusion design
+- copy only the voxel-related improvements from `E3_3`
+
+Files:
+- `src/config/model/centerpoint_radar_pfn2_gate_e8_e3_3.yaml`
+- `src/tools/slurm_train_e8_e3_3.sh`
+
+Important:
+- do not add new encoder changes in this step
+- compare directly against `E8`
+
+Keep if:
+- ROI mAP improves over `E8`
+- the run stays stable with the finer BEV grid
+
+
+#### E8_E3_3_SMALLERVOXEL - Sweep one step smaller than `E3_3`
+
+Hypothesis:
+- if `0.256 m` helps, an even finer voxel grid may recover more local structure for camera-guided radar detection
+
+Change:
+- start from `E8_E3_3`
+- reduce voxel size one more step and update all dependent grid settings consistently
+
+Files:
+- `src/config/model/centerpoint_radar_pfn2_gate_e8_e3_3_smallervoxel.yaml`
+- `src/tools/slurm_train_e8_e3_3_smallervoxel.sh`
+
+Important:
+- this is a voxel-size sweep only
+- do not combine with encoder changes in the same experiment
+- watch memory usage carefully because this variant is heavier than `E8_E3_3`
+
+Keep if:
+- ROI mAP improves over `E8_E3_3`
+- test-time behavior does not degrade further
+
+
+#### E8_E3_3_ENCODER_DROPOUT - Stronger radar encoder on top of `E8_E3_3`
+
+Hypothesis:
+- after fixing voxelization, the next bottleneck may be radar feature extraction rather than geometry alone
+
+Change:
+- start from `E8_E3_3`
+- widen the PFN encoder
+- use the point-wise reliability gate as a lightweight attention-style encoder
+- add light dropout in the PFN, BEV backbone, and shared detection head
+
+Files:
+- `src/model/voxel_encoders/utils.py`
+- `src/model/voxel_encoders/pillar_encoder.py`
+- `src/model/backbones/second.py`
+- `src/model/heads/centerpoint_head.py`
+- `src/config/model/centerpoint_radar_pfn2_gate_e8_e3_3_encoder_dropout.yaml`
+- `src/tools/slurm_train_e8_e3_3_encoder_dropout.sh`
+
+Important:
+- this is intentionally a stronger regularized radar encoder variant
+- compare directly against `E8_E3_3`, not against the original `E8`
+
+Keep if:
+- ROI mAP improves over `E8_E3_3`
+- the val/test gap becomes smaller instead of larger
+
+
+### E8_E3_3_ALL - combine radar3 with the stronger regularized encoder
+
+Change:
+- start from `E8_E3_3`
+- switch to official VoD `radar_3frames`
+- keep voxel size at `[0.256, 0.256, 5]`
+- widen the PFN encoder
+- add lightweight point self-attention inside the pillar encoder
+- keep dropout in the PFN, BEV backbone, and shared detection head
+
+Files:
+- `src/model/voxel_encoders/pillar_encoder.py`
+- `src/config/model/centerpoint_radar_pfn2_gate_e8_e3_3_all.yaml`
+- `src/tools/slurm_train_e8_e3_3_all.sh`
+
+Important:
+- this is a deliberate combination experiment, not a new baseline
+- do not mix in the smaller-voxel branch here; keep the `E8_E3_3` voxel settings fixed
+- use official `radar_3frames` rather than custom temporal stacking
+
+Keep if:
+- ROI mAP improves over `E8_E3_3`
+- multi-frame radar helps without making the validation/test gap worse
+
 ## What I Recommend First
 
 If time is limited, do this exact order:
